@@ -34,7 +34,7 @@ private:
     // Stores KV pairs to send over the network. The reader thread will push messages to the queue.
     // There is a message queue for each shard.
     std::vector<std::unique_ptr<MessageQueue>> message_queues_;
-    std::vector<ROCKSDB_NAMESPACE::DB*> shards_;
+    ROCKSDB_NAMESPACE::DB* shard_;
     std::vector<std::vector<RangeType>> thread_key_ranges_;
     bool kill_;
     void ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_thread_per_shard);

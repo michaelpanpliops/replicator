@@ -19,7 +19,7 @@ class Consumer {
 public:
   explicit Consumer();
   virtual ~Consumer();
-  void Start(const std::string& replica_path, uint32_t num_of_threads, std::string& ip, uint16_t& port);
+  void Start(const std::string& replica_path, uint32_t num_of_threads, uint16_t& port);
   void Stop();
 private:
     // Contains connections to all shards. Each shard has a single connection.

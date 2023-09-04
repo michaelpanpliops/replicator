@@ -10,14 +10,16 @@ using namespace std::literals;
 
 
 static void PrintHelp() {
-  std::cout << "Usage: client_exe -s shard -p path" << std::endl;
+  std::cout << "Usage: client_exe -s shard -p path -a ip_addr" << std::endl;
   std::cout << "  -s the index of the shard" << std::endl;
   std::cout << "  -p the path to the replication directory" << std::endl;
+  std::cout << "  -a the ip address of the server" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], int& shard, std::string& path) {
+static void ParseArgs(int argc, char *argv[], int& shard, std::string& path, std::string& ip) {
   shard = -1;
   path.clear();
+  ip.clear();
 
   for (int i = 1; i < argc; ++i) {
     if (!strcmp("-s", argv[i]) && i+1 < argc) {
@@ -26,6 +28,10 @@ static void ParseArgs(int argc, char *argv[], int& shard, std::string& path) {
     }
     if (!strcmp("-p", argv[i]) && i+1 < argc) {
       path = argv[++i];
+      continue;
+    }
+    if (!strcmp("-a", argv[i]) && i+1 < argc) {
+      ip = argv[++i];
       continue;
     }
     if (!strcmp("-h", argv[i])) {
@@ -37,7 +43,7 @@ static void ParseArgs(int argc, char *argv[], int& shard, std::string& path) {
     exit(1);
   }
 
-  if (shard < 0 || path.empty()) {
+  if (shard < 0 || path.empty() || ip.empty()) {
     PrintHelp();
     exit(1);
   }
@@ -46,10 +52,11 @@ static void ParseArgs(int argc, char *argv[], int& shard, std::string& path) {
 int main(int argc, char* argv[]) {
   int shard;
   std::string dsp_path;
-  ParseArgs(argc, argv, shard, dsp_path);
+  std::string server_ip;
+  ParseArgs(argc, argv, shard, dsp_path, server_ip);
 
   try {
-    RpcChannel rpc(RpcChannel::Pier::Client);
+    RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
     RestoreCheckpoint(rpc, shard, dsp_path);
 
     bool done = false;

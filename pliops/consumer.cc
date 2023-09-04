@@ -87,14 +87,12 @@ std::vector<ROCKSDB_NAMESPACE::DB*> Consumer::OpenReplica(const std::string& rep
     return result;
 }
 
-void Consumer::Start(const std::string& replica_path, uint32_t num_of_threads, std::string& ip, uint16_t& port) {
+void Consumer::Start(const std::string& replica_path, uint32_t num_of_threads, uint16_t& port) {
     shards_ = OpenReplica(replica_path);
 
     // Listen for connections from all shards. connections are ordered by the shard ID
     // connections_ = wait_for_connections(config_.server_port, config_.number_of_shards);
-    char _inet_addr[INET_ADDRSTRLEN];
-    connections_ = wait_for_connections(_inet_addr, port);
-    ip = _inet_addr;
+    connections_ = wait_for_connections(port);
 
     // For each shard, we allocate the same number of writer threads.
     // We already made sure the total number of threads is divisible by the number of shards.

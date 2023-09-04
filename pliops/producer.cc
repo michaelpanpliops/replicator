@@ -11,14 +11,11 @@ Producer::Producer()
 {}
 
 Producer::~Producer() {
-    for (auto* db_pointer : shards_) {
-        db_pointer->Close();
-        delete db_pointer;
-    }
+    shard_->Close();
+    delete shard_;
 }
 
 void Producer::OpenShard(const std::string& shard_path) {
-    std::vector<ROCKSDB_NAMESPACE::DB*> result;
     ROCKSDB_NAMESPACE::DB* db;
     ROCKSDB_NAMESPACE::Options options;
     options.create_if_missing = false;
@@ -36,20 +33,7 @@ void Producer::OpenShard(const std::string& shard_path) {
         throw std::runtime_error(FormatString("Failed to open shard, reason: %s", status.ToString()));
     }
 
-    result.push_back(db);
-    shards_ = result;
-}
-
-std::string GenerateFrenzyKey(uint32_t key_base, uint32_t shard_id, uint32_t thread_id) {
-    static constexpr uint32_t KEY_LENGTH = 32;
-    auto tmp = std::to_string(key_base) +";"+ std::to_string(shard_id) +";"+ std::to_string(thread_id);
-    return tmp + std::string(KEY_LENGTH - tmp.size(), 'k');
-}
-
-std::string GenerateFrenzyValue(uint32_t key_base, uint32_t shard_id, uint32_t thread_id) {
-    static constexpr uint32_t VALUE_SIZE = 512;
-    auto tmp = std::to_string(key_base) +";"+ std::to_string(shard_id) +";"+ std::to_string(thread_id);
-    return tmp + std::string(VALUE_SIZE - tmp.size(), 'v');
+   shard_ = db;
 }
 
 void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_thread_per_shard) {
@@ -61,7 +45,7 @@ void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_t
     ROCKSDB_NAMESPACE::Iterator* iterator;
     RangeType range;
 
-    db = shards_[shard_id];
+    db = shard_;
     range = thread_key_ranges_[shard_id][thread_id];
     Status status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
     if (!status.ok()) {
@@ -128,7 +112,7 @@ void Producer::CommunicationThread(uint32_t shard_id) {
 
 std::vector<RangeType> Producer::CalculateThreadKeyRanges(uint32_t shard_id, uint32_t num_of_threads) {
   // Calculate ranges
-  auto db = shards_[shard_id];
+  auto db = shard_;
   ROCKSDB_NAMESPACE::ColumnFamilyHandle* cf_handle = db->DefaultColumnFamily();
   std::vector<RangeType> result;
   std::vector<std::string> range_split_keys;
@@ -168,7 +152,7 @@ void Producer::Run(const std::string& ip, uint16_t port, uint32_t max_num_of_thr
     const uint32_t shard_id = 0;
     // If any files left at L0, compact them to L1. This is essential to calculate key ranges correctly
     log_message(FormatString("Ensuring shard #%d has no L0 files\n", shard_id));
-    auto status = CompactL0Files(shards_[shard_id], shards_[shard_id]->DefaultColumnFamily());
+    auto status = CompactL0Files(shard_, shard_->DefaultColumnFamily());
     if (!status.ok()) {
         throw std::runtime_error(FormatString("Failed compacting L0 files of shard #%d, reason: %s", shard_id, status.ToString()));
     }

@@ -1,30 +1,86 @@
-#pragma once
+#include "server.h"
 
-#include <memory>
-#include <string>
-#include <atomic>
-#include <functional>
+using namespace ROCKSDB_NAMESPACE;
 
-#include "rocksdb/status.h"
 
-#include "rpc.h"
-#include "producer.h"
+namespace {
+uint32_t GetUniqueCheckpointName() {
+  return 123; // For the sake of example we use hardcoded name
+}
 
-void ProvideCheckpoint(RpcChannel& rpc, const std::string &src_path);
+const std::string checkpoint_path = "/tmp";
+}
 
-class CheckpointProducer : public std::enable_shared_from_this<CheckpointProducer>
+CheckpointProducer::CheckpointProducer(const std::string &src_path, const std::string& client_ip)
+  : src_path_(src_path), client_ip_(client_ip)
 {
-public:
-  CheckpointProducer(const std::string &src_path);
-  ~CheckpointProducer(){}
+  producer_ = std::make_unique<Replicator::Producer>();
+}
 
-  void CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  void StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
-  void GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+// Process create-checkpoint request
+// Kuaishou function: SyncServiceImpl::RequireCheckpoint(...)
+void CheckpointProducer::CreateCheckpoint(
+                          const CreateCheckpointRequest& req,
+                          CreateCheckpointResponse& res)
+{
+  try {
+    log_message(FormatString("CreateCheckpoint: shard=%d\n", req.shard_number));
 
-private:
-  const std::string& src_path_;
+    // Path to db
+    auto shard_path =
+      std::filesystem::path(src_path_)/std::to_string(req.shard_number);
 
-  // Pliops replication producer
-  std::unique_ptr<Replicator::Producer> producer_;  
-};
+    // TODO: create checkpoint and store its path/name
+
+    producer_->OpenShard(shard_path);
+    res.checkpoint_id = GetUniqueCheckpointName();
+    res.size_estimation = 1024*1024;
+  } catch(const std::exception& e) {
+    throw std::runtime_error(FormatString("CreateCheckpoint:\n\t%s", e.what()));
+  }
+}
+
+// Process start-streaming request
+// Kuaishou should create a new function for this request
+void CheckpointProducer::StartStreaming(
+                          const StartStreamingRequest& req,
+                          StartStreamingResponse& res)
+{
+  try {
+    log_message(FormatString("StartStreaming: ip=%s, port=%d, #thread=%d\n",
+                  client_ip_.c_str(), req.consumer_port, req.max_num_of_threads));
+
+    producer_->Run(client_ip_, req.consumer_port, req.max_num_of_threads);
+    res.status = ServerStatus::IN_PROGRESS;
+  } catch(const std::exception& e) {
+    throw std::runtime_error(FormatString("StartStreaming:\n\t%s", e.what()));
+  }
+}
+
+// Process get-status request
+// Kuaishou should create a new function for this request
+void CheckpointProducer::GetStatus(
+                          const GetStatusRequest& req,
+                          GetStatusResponse& res)
+{
+  res.status = ServerStatus::IN_PROGRESS;
+}
+
+void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip)
+{
+  using namespace std::placeholders;
+
+  CheckpointProducer cp(src_path, client_ip);
+
+  std::function<void(const CreateCheckpointRequest& req, CreateCheckpointResponse& res)>
+    create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
+  rpc.ProcessCommand(create_checkpoint_cb);
+
+  std::function<void(const StartStreamingRequest& req, StartStreamingResponse& res)>
+    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
+  rpc.ProcessCommand(start_streaming_cb);
+
+  // while(true) {
+  //   rpc.ProcessCommand(GetStatus);
+  // }
+}
