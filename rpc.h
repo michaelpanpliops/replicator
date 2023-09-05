@@ -50,7 +50,9 @@ struct GetStatusRequest {
 };
 
 struct GetStatusResponse {
-  ServerStatus status;  
+  ServerStatus status;
+  uint64_t num_ops;
+  uint64_t num_bytes;
 };
 
 #pragma pack(pop)

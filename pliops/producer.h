@@ -18,12 +18,19 @@ using RangeType = std::pair<std::optional<std::string>, std::optional<std::strin
 using MessageQueue = moodycamel::BlockingConcurrentQueue<std::pair<std::string, std::string>>;
 constexpr size_t MESSAGE_QUEUE_CAPACITY = 32 * 10000;
 
+struct Statistics {
+  std::atomic<uint64_t> num_ops = 0;
+  std::atomic<uint64_t> num_bytes = 0;
+};
+
 class Producer {
 public:
     explicit Producer();
     virtual ~Producer();
     void OpenShard(const std::string& shard_path);
-    void Run(const std::string& ip, uint16_t port, uint32_t max_num_of_threads);
+    void Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads);
+    void Stop();
+    void Stats(uint64_t& num_ops, uint64_t& num_bytes);
 
 private:
     // Contains connections to all shards. Each shard has a single connection.
@@ -31,6 +38,10 @@ private:
     // For each shard, we maintain the same specified number of reader threads.
     std::vector<std::vector<std::thread>> reader_threads_;
     std::vector<std::thread> communication_threads_;
+
+    // Statistics
+    Statistics statistics_;
+
     // Stores KV pairs to send over the network. The reader thread will push messages to the queue.
     // There is a message queue for each shard.
     std::vector<std::unique_ptr<MessageQueue>> message_queues_;

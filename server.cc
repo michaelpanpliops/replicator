@@ -5,7 +5,7 @@ using namespace ROCKSDB_NAMESPACE;
 
 namespace {
 uint32_t GetUniqueCheckpointName() {
-  return 123; // For the sake of example we use hardcoded name
+  return 123; // For the sake of the example we use hardcoded name
 }
 
 const std::string checkpoint_path = "/tmp";
@@ -50,7 +50,7 @@ void CheckpointProducer::StartStreaming(
     log_message(FormatString("StartStreaming: ip=%s, port=%d, #thread=%d\n",
                   client_ip_.c_str(), req.consumer_port, req.max_num_of_threads));
 
-    producer_->Run(client_ip_, req.consumer_port, req.max_num_of_threads);
+    producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads);
     res.status = ServerStatus::IN_PROGRESS;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("StartStreaming:\n\t%s", e.what()));
@@ -64,7 +64,14 @@ void CheckpointProducer::GetStatus(
                           GetStatusResponse& res)
 {
   res.status = ServerStatus::IN_PROGRESS;
+  producer_->Stats(res.num_ops, res.num_bytes);
 }
+
+// void CheckpointProducer::ReplicationFinished()
+// {
+//   // callback for producer_->Start
+//   // remove the checkpoint
+// }
 
 void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip)
 {
@@ -80,7 +87,9 @@ void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::
     start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
   rpc.ProcessCommand(start_streaming_cb);
 
-  // while(true) {
-  //   rpc.ProcessCommand(GetStatus);
-  // }
+  std::function<void(const GetStatusRequest& req, GetStatusResponse& res)>
+    get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
+  while(true) {
+    rpc.ProcessCommand(get_status_cb);
+  }
 }

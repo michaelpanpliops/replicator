@@ -50,12 +50,14 @@ void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id, uint16_t port,
 }
 
 // Send status request to the server
-void GetStatus(RpcChannel &rpc)
+void GetStatus(RpcChannel& rpc, uint64_t& num_ops, uint64_t& num_bytes)
 {
   try {
     GetStatusRequest req;
     GetStatusResponse res;
     rpc.SendCommand(req, res);
+    num_ops = res.num_ops;
+    num_bytes = res.num_bytes;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("GetStatus:\n\t%s", e.what()));
   }
@@ -76,7 +78,7 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
   if (!std::filesystem::exists(replica_path)) {
     std::filesystem::create_directories(replica_path);
   } if (!std::filesystem::is_empty(replica_path)) {
-    auto s = DestroyDB(replica_path);
+    auto s = DestroyDB(replica_path, Options());
     if (!s.ok()) {
       throw std::runtime_error(FormatString("DestroyDB failed: %s", s.ToString()));
     }
@@ -102,10 +104,13 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
 // Check status, should be called periodically, returns true if done
 bool CheckReplicationStatus(RpcChannel& rpc)
 {
-  GetStatus(rpc);
+  uint64_t num_ops, num_bytes;
+  GetStatus(rpc, num_ops, num_bytes);
+  log_message(FormatString("ERROR\n\tnum_ops = %lld, num_bytes = %lld\n", num_ops, num_bytes));
+
   // send request to the source to get the replication status
   // -> possible responses { in_progress, done, error }
   // also check replication_server_ status
   // then proceed based on the collected statuses
-  return true;
+  return false;
 }
