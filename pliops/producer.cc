@@ -11,14 +11,11 @@ Producer::Producer()
 {}
 
 Producer::~Producer() {
-    for (auto* db_pointer : shards_) {
-        db_pointer->Close();
-        delete db_pointer;
-    }
+    shard_->Close();
+    delete shard_;
 }
 
 void Producer::OpenShard(const std::string& shard_path) {
-    std::vector<ROCKSDB_NAMESPACE::DB*> result;
     ROCKSDB_NAMESPACE::DB* db;
     ROCKSDB_NAMESPACE::Options options;
     options.create_if_missing = false;
@@ -36,20 +33,7 @@ void Producer::OpenShard(const std::string& shard_path) {
         throw std::runtime_error(FormatString("Failed to open shard, reason: %s", status.ToString()));
     }
 
-    result.push_back(db);
-    shards_ = result;
-}
-
-std::string GenerateFrenzyKey(uint32_t key_base, uint32_t shard_id, uint32_t thread_id) {
-    static constexpr uint32_t KEY_LENGTH = 32;
-    auto tmp = std::to_string(key_base) +";"+ std::to_string(shard_id) +";"+ std::to_string(thread_id);
-    return tmp + std::string(KEY_LENGTH - tmp.size(), 'k');
-}
-
-std::string GenerateFrenzyValue(uint32_t key_base, uint32_t shard_id, uint32_t thread_id) {
-    static constexpr uint32_t VALUE_SIZE = 512;
-    auto tmp = std::to_string(key_base) +";"+ std::to_string(shard_id) +";"+ std::to_string(thread_id);
-    return tmp + std::string(VALUE_SIZE - tmp.size(), 'v');
+   shard_ = db;
 }
 
 void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_thread_per_shard) {
@@ -61,7 +45,7 @@ void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_t
     ROCKSDB_NAMESPACE::Iterator* iterator;
     RangeType range;
 
-    db = shards_[shard_id];
+    db = shard_;
     range = thread_key_ranges_[shard_id][thread_id];
     Status status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
     if (!status.ok()) {
@@ -101,6 +85,8 @@ void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_t
         }
 
         total_number_of_operations++;
+        statistics_.num_ops++; // atomic
+        statistics_.num_bytes.fetch_add(key.size() + value.size()); // atomic
     }
     log_message(FormatString("Reader thread #%d shard %d ended. Performed %lld operations.\n", thread_id, shard_id, total_number_of_operations));
 }
@@ -128,7 +114,7 @@ void Producer::CommunicationThread(uint32_t shard_id) {
 
 std::vector<RangeType> Producer::CalculateThreadKeyRanges(uint32_t shard_id, uint32_t num_of_threads) {
   // Calculate ranges
-  auto db = shards_[shard_id];
+  auto db = shard_;
   ROCKSDB_NAMESPACE::ColumnFamilyHandle* cf_handle = db->DefaultColumnFamily();
   std::vector<RangeType> result;
   std::vector<std::string> range_split_keys;
@@ -150,28 +136,14 @@ std::vector<RangeType> Producer::CalculateThreadKeyRanges(uint32_t shard_id, uin
   return result;
 }
 
-Status CompactL0Files(ROCKSDB_NAMESPACE::DB* db, ROCKSDB_NAMESPACE::ColumnFamilyHandle* handle) {
-  // Assumes default CF
-  ROCKSDB_NAMESPACE::ColumnFamilyMetaData meta;
-  db->GetColumnFamilyMetaData(&meta);
-  std::vector<std::string> files_to_compact;
-  for (auto& file : meta.levels[0].files) {
-    files_to_compact.push_back(file.name);
-  }
-  if (files_to_compact.size() > 0) {
-    return db->CompactFiles(ROCKSDB_NAMESPACE::CompactionOptions(), files_to_compact, 1);
-  }
-  return Status::OK();
-}
-
-void Producer::Run(const std::string& ip, uint16_t port, uint32_t max_num_of_threads) {
+void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads) {
     const uint32_t shard_id = 0;
     // If any files left at L0, compact them to L1. This is essential to calculate key ranges correctly
-    log_message(FormatString("Ensuring shard #%d has no L0 files\n", shard_id));
-    auto status = CompactL0Files(shards_[shard_id], shards_[shard_id]->DefaultColumnFamily());
-    if (!status.ok()) {
-        throw std::runtime_error(FormatString("Failed compacting L0 files of shard #%d, reason: %s", shard_id, status.ToString()));
-    }
+    // log_message(FormatString("Ensuring shard #%d has no L0 files\n", shard_id));
+    // auto status = CompactL0Files(shard_, shard_->DefaultColumnFamily());
+    // if (!status.ok()) {
+    //     throw std::runtime_error(FormatString("Failed compacting L0 files of shard #%d, reason: %s", shard_id, status.ToString()));
+    // }
     thread_key_ranges_.push_back(CalculateThreadKeyRanges(shard_id, max_num_of_threads));
     log_message(FormatString("Shard #%d is split into %d read ranges\n", shard_id, thread_key_ranges_.back().size()));
 
@@ -198,6 +170,11 @@ void Producer::Run(const std::string& ip, uint16_t port, uint32_t max_num_of_thr
             this->ReaderThread(shard_id, thread_id, 1 == threads_per_current_shard);
         }));
     }
+}
+
+void Producer::Stop() {
+    kill_ = true;
+    const uint32_t shard_id = 0;
 
     for (auto& reader_thread_per_shard : reader_threads_) {
         for (auto& reader_thread : reader_thread_per_shard) {
@@ -208,9 +185,13 @@ void Producer::Run(const std::string& ip, uint16_t port, uint32_t max_num_of_thr
     message_queues_[shard_id]->enqueue({"", ""}); // Signal finish.
     communication_threads_[shard_id].join();
 
-    kill_ = true;
-
     log_message("Producer finished sending replication.\n");
+}
+
+void Producer::Stats(uint64_t& num_ops, uint64_t& num_bytes)
+{
+  num_ops = statistics_.num_ops;
+  num_bytes = statistics_.num_bytes;
 }
 
 }

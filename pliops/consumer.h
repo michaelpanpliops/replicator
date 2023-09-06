@@ -15,11 +15,16 @@ namespace Replicator {
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
 constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
 
+struct Statistics {
+    std::atomic<uint64_t> number_of_operations = 0;
+    std::atomic<uint64_t> number_of_bytes = 0;
+};
+
 class Consumer {
 public:
   explicit Consumer();
   virtual ~Consumer();
-  void Start(const std::string& replica_path, uint32_t num_of_threads, std::string& ip, uint16_t& port);
+  void Start(const std::string& replica_path, uint32_t num_of_threads, uint16_t& port);
   void Stop();
 private:
     // Contains connections to all shards. Each shard has a single connection.
@@ -27,6 +32,10 @@ private:
     // For each shard, we maintain the same specified number of writer threads.
     std::vector<std::vector<std::thread>> writer_threads_;
     std::vector<std::thread> communication_threads_;
+
+    // Statistics
+    Statistics statistics_;
+ 
     // Stores KV pairs received over the network. The writer thread will pull messages out of the queue.
     // There is a message queue for each shard.
     std::vector<std::unique_ptr<ServerMessageQueue>> message_queues_;

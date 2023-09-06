@@ -5,15 +5,16 @@ using namespace ROCKSDB_NAMESPACE;
 
 namespace {
 uint32_t GetUniqueCheckpointName() {
-  return 123; // For the sake of example we use hardcoded name
+  return 123; // For the sake of the example we use hardcoded name
 }
 
 const std::string checkpoint_path = "/tmp";
 }
 
-CheckpointProducer::CheckpointProducer(const std::string &src_path)
-  : src_path_(src_path)
+CheckpointProducer::CheckpointProducer(const std::string &src_path, const std::string& client_ip)
+  : src_path_(src_path), client_ip_(client_ip)
 {
+  producer_ = std::make_unique<Replicator::Producer>();
 }
 
 // Process create-checkpoint request
@@ -22,39 +23,21 @@ void CheckpointProducer::CreateCheckpoint(
                           const CreateCheckpointRequest& req,
                           CreateCheckpointResponse& res)
 {
-  req.shard_number;
-  // create path to db
-  // create checkpoint and store its path/name
-  auto shard_path =
-    std::filesystem::path(src_path_)/std::to_string(req.shard_number);
+  try {
+    log_message(FormatString("CreateCheckpoint: shard=%d\n", req.shard_number));
 
-  producer_->OpenShard(shard_path);
-  res.checkpoint_id = GetUniqueCheckpointName();
-  res.size_estimation = 1024*1024;
+    // Path to db
+    auto shard_path =
+      std::filesystem::path(src_path_)/std::to_string(req.shard_number);
 
-    // auto shard = shard_manager_->GetShard(request->shard());
-    // if (!shard)  {
-    // }
+    // TODO: create checkpoint and store its path/name
 
-    // std::string name = GetUniqueCheckpointName();  // Allocate an unique name for the checkpoint
-
-    // Status s;
-    // auto dir_name = std::to_string(request->shard()) + "-" + name;
-    // auto path = FsUtil::PathJoin({env_->db_path, "checkpoint", dir_name});  // Position to save checkpoint files
-    // auto checkpoint = shard->CreateCheckpoint(name, path, &s);
-    // if (!s.ok()) {
-    // }
-
-    // {
-    //   std::lock_guard<std::mutex> locker(snapshot_lock_);
-    //   checkpoint_map_[name] = checkpoint;
-    //   LOG(INFO) << "SyncServiceImpl::RequireCheckpoint Create Checkpoint id:" << name
-    //     << " shard:" << request->shard();
-    // }
-
-    // response->set_ok(true);
-    // response->set_checkpoint_id(name);
-    // done->Run();
+    producer_->OpenShard(shard_path);
+    res.checkpoint_id = GetUniqueCheckpointName();
+    res.size_estimation = 1024*1024;
+  } catch(const std::exception& e) {
+    throw std::runtime_error(FormatString("CreateCheckpoint:\n\t%s", e.what()));
+  }
 }
 
 // Process start-streaming request
@@ -63,8 +46,15 @@ void CheckpointProducer::StartStreaming(
                           const StartStreamingRequest& req,
                           StartStreamingResponse& res)
 {
-  producer_->Run(req.consumer_ip, req.consumer_port, req.max_num_of_threads);
-  res.status = ServerStatus::IN_PROGRESS;
+  try {
+    log_message(FormatString("StartStreaming: ip=%s, port=%d, #thread=%d\n",
+                  client_ip_.c_str(), req.consumer_port, req.max_num_of_threads));
+
+    producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads);
+    res.status = ServerStatus::IN_PROGRESS;
+  } catch(const std::exception& e) {
+    throw std::runtime_error(FormatString("StartStreaming:\n\t%s", e.what()));
+  }
 }
 
 // Process get-status request
@@ -74,13 +64,20 @@ void CheckpointProducer::GetStatus(
                           GetStatusResponse& res)
 {
   res.status = ServerStatus::IN_PROGRESS;
+  producer_->Stats(res.num_ops, res.num_bytes);
 }
 
-void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path)
+// void CheckpointProducer::ReplicationFinished()
+// {
+//   // callback for producer_->Start
+//   // remove the checkpoint
+// }
+
+void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip)
 {
   using namespace std::placeholders;
 
-  CheckpointProducer cp(src_path);
+  CheckpointProducer cp(src_path, client_ip);
 
   std::function<void(const CreateCheckpointRequest& req, CreateCheckpointResponse& res)>
     create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
@@ -90,7 +87,9 @@ void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path)
     start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
   rpc.ProcessCommand(start_streaming_cb);
 
-  // while(true) {
-  //   rpc.ProcessCommand(GetStatus);
-  // }
+  std::function<void(const GetStatusRequest& req, GetStatusResponse& res)>
+    get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
+  while(true) {
+    rpc.ProcessCommand(get_status_cb);
+  }
 }

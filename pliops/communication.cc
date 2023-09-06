@@ -121,8 +121,7 @@ std::pair<std::string, std::string> Connection<ConnectionType::TCP_SOCKET>::Rece
   return {message.key(), message.value()};
 }
 
-std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> wait_for_connections(
-                                                    char ip[INET_ADDRSTRLEN], uint16_t& port) {
+std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> wait_for_connections(uint16_t& port) {
   std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> result;
   int listenfd = 0, connfd = 0;
   struct sockaddr_in serv_addr;
@@ -159,8 +158,9 @@ std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> wait_for_co
   if ( -1 == getsockname(listenfd, (struct sockaddr*)&serv_addr, &len) ) {
       throw std::runtime_error(FormatString("failed getsockname socket with error %ld", errno));
   }
-  inet_ntop(AF_INET, &(serv_addr.sin_addr), ip, INET_ADDRSTRLEN);
-  port = serv_addr.sin_port;
+  // TODO: ip address cannot be retrieved after using INADDR_ANY binding
+  // inet_ntop(AF_INET, &(serv_addr.sin_addr), ip, INET_ADDRSTRLEN);
+  port = ntohs(serv_addr.sin_port);
 
   result.push_back(std::make_unique<Connection<ConnectionType::TCP_SOCKET>>(listenfd));
   return result;

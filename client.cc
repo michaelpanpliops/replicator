@@ -36,13 +36,11 @@ void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t checkpoint_id, u
 }
 
 // Send start streaming request to the server
-void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id,
-                    const std::string ip, uint16_t port,
+void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id, uint16_t port,
                     uint32_t num_threads, ServerStatus& status)
 {
   try {
     StartStreamingRequest req{checkpoint_id, num_threads, port };
-    strcpy(req.consumer_ip, ip.c_str());
     StartStreamingResponse res{};
     rpc.SendCommand(req, res);
     status = res.status;
@@ -52,12 +50,14 @@ void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id,
 }
 
 // Send status request to the server
-void GetStatus(RpcChannel &rpc)
+void GetStatus(RpcChannel& rpc, uint64_t& num_ops, uint64_t& num_bytes)
 {
   try {
     GetStatusRequest req;
     GetStatusResponse res;
     rpc.SendCommand(req, res);
+    num_ops = res.num_ops;
+    num_bytes = res.num_bytes;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("GetStatus:\n\t%s", e.what()));
   }
@@ -78,7 +78,7 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
   if (!std::filesystem::exists(replica_path)) {
     std::filesystem::create_directories(replica_path);
   } if (!std::filesystem::is_empty(replica_path)) {
-    auto s = DestroyDB(replica_path);
+    auto s = DestroyDB(replica_path, Options());
     if (!s.ok()) {
       throw std::runtime_error(FormatString("DestroyDB failed: %s", s.ToString()));
     }
@@ -92,23 +92,25 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
   // Start consumer
   // TODO: add calculation of number of threads
   uint32_t num_of_threads = 1;
-  std::string ip;
   uint16_t port;
-  consumer_->ReplicationConsumer().Start(replica_path, num_of_threads, ip, port);
+  consumer_->ReplicationConsumer().Start(replica_path, num_of_threads, port);
 
   // Tell server to start streaming
   ServerStatus server_status;
-  StartStreaming(rpc, checkpoint_id, ip, port, num_of_threads, server_status);
+  StartStreaming(rpc, checkpoint_id, port, num_of_threads, server_status);
   // Check status, stop if error
 }
 
 // Check status, should be called periodically, returns true if done
 bool CheckReplicationStatus(RpcChannel& rpc)
 {
-  GetStatus(rpc);
+  uint64_t num_ops, num_bytes;
+  GetStatus(rpc, num_ops, num_bytes);
+  log_message(FormatString("ERROR\n\tnum_ops = %lld, num_bytes = %lld\n", num_ops, num_bytes));
+
   // send request to the source to get the replication status
   // -> possible responses { in_progress, done, error }
   // also check replication_server_ status
   // then proceed based on the collected statuses
-  return true;
+  return false;
 }

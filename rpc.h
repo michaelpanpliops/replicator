@@ -39,7 +39,6 @@ struct StartStreamingRequest {
   uint32_t checkpoint_id;  
   uint32_t max_num_of_threads;
   uint16_t consumer_port;
-  char consumer_ip[INET_ADDRSTRLEN];
 };
 
 struct StartStreamingResponse {
@@ -51,7 +50,9 @@ struct GetStatusRequest {
 };
 
 struct GetStatusResponse {
-  ServerStatus status;  
+  ServerStatus status;
+  uint64_t num_ops;
+  uint64_t num_bytes;
 };
 
 #pragma pack(pop)
@@ -61,7 +62,7 @@ class RpcChannel {
 public:
   enum class Pier { Client, Server };
 
-  RpcChannel(Pier pier);
+  RpcChannel(Pier pier, const std::string& pier_ip);
   ~RpcChannel();
 
   template<typename Tin, typename Tout>

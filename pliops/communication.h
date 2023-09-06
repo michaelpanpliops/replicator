@@ -64,10 +64,10 @@ namespace Replicator {
   }
 
   template<ConnectionType Protocol>
-  std::vector<std::unique_ptr<Connection<Protocol>>> wait_for_connections(char ip[INET_ADDRSTRLEN], uint16_t& port) {
+  std::vector<std::unique_ptr<Connection<Protocol>>> wait_for_connections(uint16_t& port) {
     static_assert("Usupported connection type");
   }
-  std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> wait_for_connections(char ip[INET_ADDRSTRLEN], uint16_t& port);
+  std::vector<std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>> wait_for_connections(uint16_t& port);
 
 
   template<ConnectionType Protocol>
