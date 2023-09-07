@@ -16,8 +16,8 @@ using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<st
 constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
 
 struct Statistics {
-    std::atomic<uint64_t> number_of_operations = 0;
-    std::atomic<uint64_t> number_of_bytes = 0;
+  std::atomic<uint64_t> num_kv_pairs = 0;
+  std::atomic<uint64_t> num_bytes = 0;
 };
 
 class Consumer {

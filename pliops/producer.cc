@@ -7,12 +7,11 @@
 namespace Replicator {
 
 Producer::Producer()
-    : connections_(), reader_threads_(), kill_(false)
+    : kill_(false)
 {}
 
 Producer::~Producer() {
-    shard_->Close();
-    delete shard_;
+  assert(!shard_);
 }
 
 void Producer::OpenShard(const std::string& shard_path) {
@@ -23,6 +22,7 @@ void Producer::OpenShard(const std::string& shard_path) {
     options.disable_auto_compactions = true;
 #ifndef LEGACY_ROCKSDB_SENDER
     options.OptimizeForXdpRocks();
+    options.pliops_db_options.graceful_close_timeout_sec = 0;
 #else
     // Tune legacy RocksDB options here
 #endif
@@ -36,7 +36,7 @@ void Producer::OpenShard(const std::string& shard_path) {
    shard_ = db;
 }
 
-void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_thread_per_shard) {
+void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, std::function<void()> done_callback) {
     uint64_t total_number_of_operations = 0;
     log_message(FormatString("Reader thread #%d for shard %d started\n", thread_id, shard_id));
 
@@ -78,6 +78,7 @@ void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_t
         iterator->Next();
 
         bool enqueued = message_queues_[shard_id]->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});
+        // TODO: check kill_ in the loop
         while (!enqueued) {
             // Server side is not fast enough, message queue is full. re-attempt enqueueing to shard's message queue in a short bit.
             std::this_thread::sleep_for(std::chrono::microseconds(100));
@@ -85,15 +86,33 @@ void Producer::ReaderThread(uint32_t shard_id, uint32_t thread_id, bool single_t
         }
 
         total_number_of_operations++;
-        statistics_.num_ops++; // atomic
+        statistics_.num_kv_pairs++; // atomic
         statistics_.num_bytes.fetch_add(key.size() + value.size()); // atomic
     }
     log_message(FormatString("Reader thread #%d shard %d ended. Performed %lld operations.\n", thread_id, shard_id, total_number_of_operations));
+
+  // Release the iterator
+  // TODO: check rc
+  iterator->Close();
+  delete iterator;
+
+  // The following code must be under lock to ensure atomicity
+  std::lock_guard<std::mutex> lock(active_reader_threads_mutex_);
+  active_reader_threads_count_--;
+  if (active_reader_threads_count_ == 0) {
+    // The last active thread closes the DB and calls the done-callback
+    message_queues_[shard_id]->enqueue({"", ""}); // Signal finish
+    // TODO: check rc
+    shard_->Close();
+    delete shard_;
+    shard_ = nullptr;
+    done_callback();
+  }
 }
 
 void Producer::CommunicationThread(uint32_t shard_id) {
     log_message(FormatString("Communication thread for shard #%d: Started.\n", shard_id));
-    auto& connection = connections_[shard_id];
+    auto& connection = connection_;
     std::string key, value;
     while(!kill_){
         try {
@@ -136,38 +155,32 @@ std::vector<RangeType> Producer::CalculateThreadKeyRanges(uint32_t shard_id, uin
   return result;
 }
 
-void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads) {
+void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads, std::function<void()>& done_callback) {
     const uint32_t shard_id = 0;
-    // If any files left at L0, compact them to L1. This is essential to calculate key ranges correctly
-    // log_message(FormatString("Ensuring shard #%d has no L0 files\n", shard_id));
-    // auto status = CompactL0Files(shard_, shard_->DefaultColumnFamily());
-    // if (!status.ok()) {
-    //     throw std::runtime_error(FormatString("Failed compacting L0 files of shard #%d, reason: %s", shard_id, status.ToString()));
-    // }
     thread_key_ranges_.push_back(CalculateThreadKeyRanges(shard_id, max_num_of_threads));
     log_message(FormatString("Shard #%d is split into %d read ranges\n", shard_id, thread_key_ranges_.back().size()));
 
     // Get connections for all shards
     log_message("Connecting to server...\n");
     message_queues_.push_back(std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY));
-    connections_.push_back(connect<ConnectionType::TCP_SOCKET>(ip, port));
+    connection_ = connect<ConnectionType::TCP_SOCKET>(ip, port);
     log_message(FormatString("Connected shard #%d\n", shard_id));
 
     // Start the single communication thread per shard (done separately to ensure the integrity of Producer's internal connections queue)
-    communication_threads_.push_back(std::thread([this, shard_id]() {
+    communication_thread_ = std::make_unique<std::thread>([this, shard_id]() {
         this->CommunicationThread(shard_id);
-    }));
+    });
 
     log_message("Starting reader threads\n");
-    reader_threads_.push_back({});
     auto threads_per_current_shard = max_num_of_threads;
 
     assert(threads_per_current_shard >= thread_key_ranges_[shard_id].size());
     threads_per_current_shard = std::min<size_t>(threads_per_current_shard, thread_key_ranges_[shard_id].size());
 
+    active_reader_threads_count_ = threads_per_current_shard;
     for (uint32_t thread_id = 0; thread_id < threads_per_current_shard; ++thread_id) {
-        reader_threads_[shard_id].push_back(std::thread([this, shard_id, thread_id, threads_per_current_shard]() {
-            this->ReaderThread(shard_id, thread_id, 1 == threads_per_current_shard);
+        reader_threads_.push_back(std::thread([this, shard_id, thread_id, done_callback]() {
+            this->ReaderThread(shard_id, thread_id, done_callback);
         }));
     }
 }
@@ -176,21 +189,19 @@ void Producer::Stop() {
     kill_ = true;
     const uint32_t shard_id = 0;
 
-    for (auto& reader_thread_per_shard : reader_threads_) {
-        for (auto& reader_thread : reader_thread_per_shard) {
-            reader_thread.join();
-        }
-    }
+  for (auto& reader_thread : reader_threads_) {
+    reader_thread.join();
+  }
 
     message_queues_[shard_id]->enqueue({"", ""}); // Signal finish.
-    communication_threads_[shard_id].join();
+    communication_thread_->join();
 
     log_message("Producer finished sending replication.\n");
 }
 
-void Producer::Stats(uint64_t& num_ops, uint64_t& num_bytes)
+void Producer::Stats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
-  num_ops = statistics_.num_ops;
+  num_kv_pairs = statistics_.num_kv_pairs;
   num_bytes = statistics_.num_bytes;
 }
 

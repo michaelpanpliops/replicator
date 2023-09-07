@@ -56,6 +56,9 @@ void Consumer::CommunicationThread(uint32_t shard_id) {
             // For server writer threads, this is normal, the sender side might have finished sending replication data.
             log_message(FormatString("Communication thread for shard #%d: Connection closed.\n", shard_id));
             message_queues_[shard_id]->wait_enqueue({"", ""}); // Empty element signals end of messages.
+
+            // TODO: set kill_
+            // TODO: update status
             break;
         }
     }

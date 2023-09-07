@@ -29,7 +29,7 @@ void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t checkpoint_id, u
     CreateCheckpointResponse res{};
     rpc.SendCommand(req, res);
     checkpoint_id = res.checkpoint_id;
-    size = res.size_estimation;
+    size = res.db_size_estimation;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("CreateCheckpoint:\n\t%s", e.what()));
   }
@@ -50,13 +50,14 @@ void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id, uint16_t port,
 }
 
 // Send status request to the server
-void GetStatus(RpcChannel& rpc, uint64_t& num_ops, uint64_t& num_bytes)
+void GetStatus(RpcChannel& rpc, ServerStatus& status, uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
   try {
     GetStatusRequest req;
     GetStatusResponse res;
     rpc.SendCommand(req, res);
-    num_ops = res.num_ops;
+    status = res.status;
+    num_kv_pairs = res.num_kv_pairs;
     num_bytes = res.num_bytes;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("GetStatus:\n\t%s", e.what()));
@@ -98,17 +99,29 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
   // Tell server to start streaming
   ServerStatus server_status;
   StartStreaming(rpc, checkpoint_id, port, num_of_threads, server_status);
-  // Check status, stop if error
+
+  if (server_status != ServerStatus::IN_PROGRESS) {
+    throw std::runtime_error(FormatString("Server responded with error to StartStreaming"));
+  }
 }
 
 // Check status, should be called periodically, returns true if done
 bool CheckReplicationStatus(RpcChannel& rpc)
 {
-  uint64_t num_ops, num_bytes;
-  GetStatus(rpc, num_ops, num_bytes);
-  log_message(FormatString("ERROR\n\tnum_ops = %lld, num_bytes = %lld\n", num_ops, num_bytes));
+  ServerStatus server_status;
+  uint64_t num_kv_pairs, num_bytes;
+  GetStatus(rpc, server_status, num_kv_pairs, num_bytes);
+  log_message(FormatString("ERROR\n\tnum_kv_pairs = %lld, num_bytes = %lld\n", num_kv_pairs, num_bytes));
 
-  // send request to the source to get the replication status
+  if (server_status == ServerStatus::ERROR) {
+    throw std::runtime_error(FormatString("Server responded with error to GetStatus"));
+  }
+
+  if (server_status == ServerStatus::DONE) {
+    return true;
+  }
+
+  // TODO
   // -> possible responses { in_progress, done, error }
   // also check replication_server_ status
   // then proceed based on the collected statuses
