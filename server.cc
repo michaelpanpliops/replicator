@@ -34,7 +34,7 @@ void CheckpointProducer::CreateCheckpoint(
 
     producer_->OpenShard(shard_path);
     res.checkpoint_id = GetUniqueCheckpointName();
-    res.size_estimation = 1024*1024;
+    res.db_size_estimation = 1024*1024;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("CreateCheckpoint:\n\t%s", e.what()));
   }
@@ -50,7 +50,9 @@ void CheckpointProducer::StartStreaming(
     log_message(FormatString("StartStreaming: ip=%s, port=%d, #thread=%d\n",
                   client_ip_.c_str(), req.consumer_port, req.max_num_of_threads));
 
-    producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads);
+    std::function<void()> done_cb = std::bind(&CheckpointProducer::ReplicationDone, this); 
+
+    producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads, done_cb);
     res.status = ServerStatus::IN_PROGRESS;
   } catch(const std::exception& e) {
     throw std::runtime_error(FormatString("StartStreaming:\n\t%s", e.what()));
@@ -64,14 +66,16 @@ void CheckpointProducer::GetStatus(
                           GetStatusResponse& res)
 {
   res.status = ServerStatus::IN_PROGRESS;
-  producer_->Stats(res.num_ops, res.num_bytes);
+  producer_->Stats(res.num_kv_pairs, res.num_bytes);
 }
 
-// void CheckpointProducer::ReplicationFinished()
-// {
-//   // callback for producer_->Start
-//   // remove the checkpoint
-// }
+void CheckpointProducer::ReplicationDone()
+{
+  log_message(FormatString("ReplicationDone\n"));
+  exit(1);
+  // TODO: update status
+  // remove the checkpoint
+}
 
 void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip)
 {

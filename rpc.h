@@ -32,7 +32,7 @@ struct CreateCheckpointRequest {
 
 struct CreateCheckpointResponse {
   uint32_t checkpoint_id;  
-  uint32_t size_estimation;  
+  uint32_t db_size_estimation;  
 };
 
 struct StartStreamingRequest {
@@ -51,7 +51,7 @@ struct GetStatusRequest {
 
 struct GetStatusResponse {
   ServerStatus status;
-  uint64_t num_ops;
+  uint64_t num_kv_pairs;
   uint64_t num_bytes;
 };
 

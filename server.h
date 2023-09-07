@@ -21,6 +21,7 @@ public:
   void CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
   void StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
   void GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+  void ReplicationDone();
 
 private:
   const std::string& src_path_;
