@@ -94,7 +94,7 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
   // TODO: add calculation of number of threads
   uint32_t num_of_threads = 1;
   uint16_t port;
-  consumer_->ReplicationConsumer().Start(replica_path, num_of_threads, port);
+  consumer_->ReplicationConsumer().Start(replica_path, port);
 
   // Tell server to start streaming
   ServerStatus server_status;
