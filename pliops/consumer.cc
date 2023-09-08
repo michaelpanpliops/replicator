@@ -9,129 +9,115 @@
 namespace Replicator {
 
 Consumer::Consumer()
-    : connections_(), writer_threads_(), kill_(false)
+  : kill_(false)
 {}
 
 Consumer::~Consumer() {
-    for (auto* db_pointer : shards_) {
-        db_pointer->Close();
-        delete db_pointer;
-    }
+  shard_->Close();
+  delete shard_;
 }
 
-void Consumer::WriterThread(uint32_t shard_id, uint32_t thread_id) {
-    log_message(FormatString("Writer thread #%d for shard %d started\n", thread_id, shard_id));
+void Consumer::WriterThread() {
+  log_message(FormatString("Writer thread started\n"));
 
-    while(!kill_) {
-        // Pop the next KV pair.
-        std::pair<std::string,std::string> message;
-        message_queues_[shard_id]->wait_dequeue(message);
-        std::string& key = message.first;
-        std::string& value = message.second;
-        if (key.empty()) {
-            // message buffer is closed, finish.
-            return;
-        }
-        // Insert KV to DB
-        ROCKSDB_NAMESPACE::WriteOptions wo;
-        wo.disableWAL = true;
-        auto status = shards_[shard_id]->Put(wo, key, value);
-        if(!status.ok()) {
-            throw std::runtime_error(FormatString("Failed inserting key %s to shard #%d, reason: %s\n", key, shard_id, status.ToString()));
-        }
+  while(!kill_) {
+    // Pop the next KV pair.
+    std::pair<std::string,std::string> message;
+    message_queue_->wait_dequeue(message);
+    std::string& key = message.first;
+    std::string& value = message.second;
+    if (key.empty()) {
+      // message buffer is closed, finish.
+      return;
     }
-    log_message(FormatString("Writer thread #%d shard %d ended\n", thread_id, shard_id));
+    // Insert KV to DB
+    ROCKSDB_NAMESPACE::WriteOptions wo;
+    wo.disableWAL = true;
+    auto status = shard_->Put(wo, key, value);
+    if(!status.ok()) {
+      throw std::runtime_error(FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
+    }
+  }
+  log_message(FormatString("Writer thread ended\n"));
 }
 
-void Consumer::CommunicationThread(uint32_t shard_id) {
-    log_message(FormatString("Communication thread for shard #%d: Started.\n", shard_id));
-    auto& listen_s = connections_[shard_id];
-    auto connection = accept(listen_s);
-    std::string key, value;
-    while(!kill_){
-        try {
-            std::tie(key, value) = connection->Receive();
-            message_queues_[shard_id]->wait_enqueue({key, value});
-        } catch (const ConnectionClosed&) {
-            // For server writer threads, this is normal, the sender side might have finished sending replication data.
-            log_message(FormatString("Communication thread for shard #%d: Connection closed.\n", shard_id));
-            message_queues_[shard_id]->wait_enqueue({"", ""}); // Empty element signals end of messages.
+void Consumer::CommunicationThread() {
+  log_message(FormatString("Communication thread started.\n"));
+  auto& listen_s = connection_;
+  auto connection = accept(listen_s);
+  std::string key, value;
+  while(!kill_){
+    try {
+      std::tie(key, value) = connection->Receive();
+      message_queue_->wait_enqueue({key, value});
+    } catch (const ConnectionClosed&) {
+      // For server writer threads, this is normal, the sender side might have finished sending replication data.
+      log_message("Communication thread: Connection closed.\n");
+      message_queue_->wait_enqueue({"", ""}); // Empty element signals end of messages.
 
-            // TODO: set kill_
-            // TODO: update status
-            break;
-        }
+      // TODO: set kill_
+      // TODO: update status
+      break;
     }
+  }
 }
 
-std::vector<ROCKSDB_NAMESPACE::DB*> Consumer::OpenReplica(const std::string& replica_path) {
-    std::vector<ROCKSDB_NAMESPACE::DB*> result;
-    unsigned int shard_id = 0;
-    ROCKSDB_NAMESPACE::DB* db;
-    ROCKSDB_NAMESPACE::Options options;
-    options.create_if_missing = true;
-    options.error_if_exists = true;
+ROCKSDB_NAMESPACE::DB* Consumer::OpenReplica(const std::string& replica_path) {
+  unsigned int shard_id = 0;
+  ROCKSDB_NAMESPACE::DB* db;
+  ROCKSDB_NAMESPACE::Options options;
+  options.create_if_missing = true;
+  options.error_if_exists = true;
 #ifndef LEGACY_ROCKSDB_SENDER
-    options.OptimizeForXdpRocks();
+  options.OptimizeForXdpRocks();
 #endif
-    options.max_background_jobs = 16;
-    options.max_subcompactions = 32;
-    auto shard_path = replica_path;
-    if (!std::filesystem::exists(shard_path)) {
-        std::filesystem::create_directories(shard_path);
-    }
-    auto status = ROCKSDB_NAMESPACE::DB::Open(options,
-                                                shard_path,
-                                                &db);
-    if (!status.ok()) {
-        throw std::runtime_error(FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
-    }
-    result.push_back(db);
-    return result;
+  options.max_background_jobs = 16;
+  options.max_subcompactions = 32;
+  auto shard_path = replica_path;
+  if (!std::filesystem::exists(shard_path)) {
+    std::filesystem::create_directories(shard_path);
+  }
+  auto status = ROCKSDB_NAMESPACE::DB::Open(options,
+                                            shard_path,
+                                            &db);
+  if (!status.ok()) {
+    throw std::runtime_error(FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
+  }
+  return db;
 }
 
-void Consumer::Start(const std::string& replica_path, uint32_t num_of_threads, uint16_t& port) {
-    shards_ = OpenReplica(replica_path);
+void Consumer::Start(const std::string& replica_path, uint16_t& port) {
+  //
+  shard_ = OpenReplica(replica_path);
 
-    // Listen for connections from all shards. connections are ordered by the shard ID
-    // connections_ = wait_for_connections(config_.server_port, config_.number_of_shards);
-    connections_ = wait_for_connections(port);
+  // Listen for incoming connection
+  connection_ = bind(port);
 
-    // For each shard, we allocate the same number of writer threads.
-    // We already made sure the total number of threads is divisible by the number of shards.
-    // We start the writer threads and the communication threads for each shard
-    log_message("Starting writer threads\n");
-    unsigned int i = 0;
-    message_queues_.push_back(std::make_unique<ServerMessageQueue>(SERVER_MESSAGE_QUEUE_CAPACITY));
-    writer_threads_.push_back({});
-    auto threads_per_shard = num_of_threads;
-    // Start writer threads
-    for (unsigned int j = 0; j < threads_per_shard; ++j) {
-        writer_threads_[i].push_back(std::thread([this, i, j]() {
-            this->WriterThread(i, j);
-        }));
-    }
-    // Start the single communication thread per shard
-    communication_threads_.push_back(std::thread([this, i]() {
-        this->CommunicationThread(i);
-    }));
+  // For each shard, we allocate the same number of writer threads.
+  // We already made sure the total number of threads is divisible by the number of shards.
+  // We start the writer threads and the communication threads for each shard
+  log_message("Starting writer threads\n");
+  message_queue_ = std::make_unique<ServerMessageQueue>(SERVER_MESSAGE_QUEUE_CAPACITY);
+
+  // Start writer threads
+  writer_thread_ = std::make_unique<std::thread>([this]() {
+    this->WriterThread();
+  });
+
+  // Start the communication thread
+  communication_thread_ =  std::make_unique<std::thread>([this]() {
+    this->CommunicationThread();
+  });
 }
 
 void Consumer::Stop()
 {
-    kill_ = true;
+  kill_ = true;
 
-    for (auto& communication_thread : communication_threads_) {
-        communication_thread.join();
-    }
+  communication_thread_->join();
+  writer_thread_->join();
 
-    for (auto& writer_threads_per_shard : writer_threads_) {
-        for (auto& writer_thread : writer_threads_per_shard) {
-            writer_thread.join();
-        }
-    }
-
-    log_message("Done.\n");
+  log_message("Done.\n");
 }
 
 }

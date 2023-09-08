@@ -57,9 +57,9 @@ std::string FormatString(const std::string& format, Args&& ... args) {
 }
 
 inline void log_message(const std::string& message) {
-    std::unique_lock lock(message_lock);
-    auto current_time = GetCurrentTimeString();
-    std::cout << FormatString("[%s]  %s", current_time, message);
+  std::unique_lock lock(message_lock);
+  auto current_time = GetCurrentTimeString();
+  std::cout << FormatString("[%s]  %s", current_time, message);
 }
 
 }
