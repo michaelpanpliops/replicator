@@ -91,6 +91,22 @@ public:
     }
   }
 
+  template<typename Tin, typename Tout>
+  bool ProcessCommand(std::function<bool(const Tin& in, Tout& out)>& callback)
+  {
+    Tin in;
+    Tout out;
+
+    if (::recv(socket_, &in, sizeof(in), 0) != sizeof(in)) {
+      throw std::runtime_error(FormatString("Rpc: Recv failed: %d", errno));
+    }
+    auto rc = callback(in, out);
+    if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
+      throw std::runtime_error(FormatString("Rpc: Send failed: %d", errno));
+    }
+    return rc;
+  }
+
   int socket_;
 };
 

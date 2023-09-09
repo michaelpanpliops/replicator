@@ -26,9 +26,7 @@ void Producer::OpenShard(const std::string& shard_path) {
 #else
   // Tune legacy RocksDB options here
 #endif
-  auto status = ROCKSDB_NAMESPACE::DB::Open(options,
-                                            shard_path,
-                                            &db);
+  auto status = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!status.ok()) {
     throw std::runtime_error(FormatString("Failed to open shard, reason: %s", status.ToString()));
   }
@@ -36,7 +34,8 @@ void Producer::OpenShard(const std::string& shard_path) {
   shard_ = db;
 }
 
-void Producer::ReaderThread(uint32_t thread_id, std::function<void()> done_callback) {
+void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id,
+                            std::function<void()> done_callback) {
   uint64_t total_number_of_operations = 0;
   log_message(FormatString("Reader thread #%d started\n", thread_id));
 
@@ -51,7 +50,13 @@ void Producer::ReaderThread(uint32_t thread_id, std::function<void()> done_callb
   if (!status.ok()) {
     throw std::runtime_error("cf_handle_->GetDescriptor(&cf_desc) failed");
   }
-  iterator = db->NewIterator(ReadOptions(), db->DefaultColumnFamily());
+
+  // Create iterator with internal parallelism
+  ReadOptions read_opts;
+  read_opts.iterator_internal_parallelism_enabled = true; // default is false
+  read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor;
+  iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
+
   if (range.first) {
     // Seek to the first element in the range
     iterator->Seek(*range.first);
@@ -107,6 +112,14 @@ void Producer::ReaderThread(uint32_t thread_id, std::function<void()> done_callb
     delete shard_;
     shard_ = nullptr;
     log_message(FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n", statistics_.num_kv_pairs.load(), statistics_.num_bytes.load()));
+
+    // Print out replication overall performance
+    auto current_time = std::chrono::system_clock::now();
+    auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time_);
+    log_message(FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
+    log_message(FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
+
+    // Call the done-callback
     done_callback();
   }
 }
@@ -161,39 +174,42 @@ void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_t
   thread_key_ranges_ = CalculateThreadKeyRanges(max_num_of_threads);
   log_message(FormatString("Shard is split into %d read ranges\n", thread_key_ranges_.size()));
 
-  // Get connections for all shards
-  log_message("Connecting to server...\n");
+  // Connect to consumer
+  log_message("Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
   connection_ = connect<ConnectionType::TCP_SOCKET>(ip, port);
   log_message(FormatString("Connected\n"));
 
+  start_time_ = std::chrono::system_clock::now();
+
   // Start the communication thread
+  log_message("Starting communication thread\n");
   communication_thread_ = std::make_unique<std::thread>([this]() {
     this->CommunicationThread();
   });
 
+  // Start the reader threads
   log_message("Starting reader threads\n");
-
   assert(max_num_of_threads >= thread_key_ranges_.size());
   auto threads_per_shard = thread_key_ranges_.size();
 
   active_reader_threads_count_ = threads_per_shard;
   for (uint32_t thread_id = 0; thread_id < threads_per_shard; ++thread_id) {
     reader_threads_.push_back(std::thread([this, thread_id, done_callback]() {
-                this->ReaderThread(thread_id, done_callback);
+                this->ReaderThread(16, thread_id, done_callback);
     }));
   }
 }
 
 void Producer::Stop() {
   kill_ = true;
-
   for (auto& reader_thread : reader_threads_) {
     reader_thread.join();
   }
 
   message_queue_->enqueue({"", ""}); // Signal finish.
   communication_thread_->join();
+  connection_.reset();
 
   log_message("Producer finished sending replication.\n");
 }

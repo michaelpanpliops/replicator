@@ -12,7 +12,7 @@ const std::string checkpoint_path = "/tmp";
 }
 
 CheckpointProducer::CheckpointProducer(const std::string &src_path, const std::string& client_ip)
-  : src_path_(src_path), client_ip_(client_ip)
+  : src_path_(src_path), client_ip_(client_ip), done_(false)
 {
   producer_ = std::make_unique<Replicator::Producer>();
 }
@@ -61,20 +61,20 @@ void CheckpointProducer::StartStreaming(
 
 // Process get-status request
 // Kuaishou should create a new function for this request
-void CheckpointProducer::GetStatus(
+bool CheckpointProducer::GetStatus(
                           const GetStatusRequest& req,
                           GetStatusResponse& res)
 {
-  res.status = ServerStatus::IN_PROGRESS;
+  res.status = done_ ? ServerStatus::DONE : ServerStatus::IN_PROGRESS;
   producer_->Stats(res.num_kv_pairs, res.num_bytes);
+  return done_; // done_returned_to_client_ = 
 }
 
 void CheckpointProducer::ReplicationDone()
 {
   log_message(FormatString("ReplicationDone\n"));
-  exit(1);
-  // TODO: update status
-  // remove the checkpoint
+  done_ = true;
+  // remove the checkpoint: here or in ProvideCheckpoint???
 }
 
 void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip)
@@ -91,9 +91,11 @@ void ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::
     start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
   rpc.ProcessCommand(start_streaming_cb);
 
-  std::function<void(const GetStatusRequest& req, GetStatusResponse& res)>
+  std::function<bool(const GetStatusRequest& req, GetStatusResponse& res)>
     get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
-  while(true) {
-    rpc.ProcessCommand(get_status_cb);
+  bool done = false;
+  while(!done) {
+    done = rpc.ProcessCommand(get_status_cb);
   }
+  cp.Stop();
 }

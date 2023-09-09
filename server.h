@@ -20,13 +20,15 @@ public:
 
   void CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
   void StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
-  void GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+  bool GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+  void ReplicationDone();
+  void Stop() { producer_->Stop(); }
 
 private:
   const std::string& src_path_;
   const std::string& client_ip_;
+  std::atomic<bool> done_;
 
   // Pliops replication producer
   std::unique_ptr<Replicator::Producer> producer_;  
 };
-

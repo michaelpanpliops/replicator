@@ -38,4 +38,3 @@ private:
   // Pliops replication consumer
   std::unique_ptr<Replicator::Consumer> replication_consumer_;
 };
-

@@ -92,7 +92,7 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
 
   // Start consumer
   // TODO: add calculation of number of threads
-  uint32_t num_of_threads = 1;
+  uint32_t num_of_threads = 2;//
   uint16_t port;
   consumer_->ReplicationConsumer().Start(replica_path, port);
 
@@ -111,13 +111,16 @@ bool CheckReplicationStatus(RpcChannel& rpc)
   ServerStatus server_status;
   uint64_t num_kv_pairs, num_bytes;
   GetStatus(rpc, server_status, num_kv_pairs, num_bytes);
-  log_message(FormatString("ERROR\n\tnum_kv_pairs = %lld, num_bytes = %lld\n", num_kv_pairs, num_bytes));
+  log_message(FormatString("Transferred so far:\n\tnum_kv_pairs = %lld, num_bytes = %lld\n",
+                            num_kv_pairs, num_bytes));
 
   if (server_status == ServerStatus::ERROR) {
     throw std::runtime_error(FormatString("Server responded with error to GetStatus"));
   }
 
   if (server_status == ServerStatus::DONE) {
+    consumer_->ReplicationConsumer().Finish();
+    consumer_.reset();
     return true;
   }
 

@@ -5,6 +5,48 @@
 
 namespace Replicator {
 
+struct KvPairMessage {
+  void set_key_value(const char* key, uint32_t key_size, const char* value, uint32_t value_size) {
+    uint32_t message_size = sizeof(key_size) + key_size + sizeof(value_size) + value_size;
+    buffer_.resize(message_size);
+    char* ptr = buffer_.data();
+    memcpy(ptr, &key_size, sizeof(key_size));
+    ptr += sizeof(key_size);
+    memcpy(ptr, key, key_size);
+    ptr += key_size;
+    memcpy(ptr, &value_size, sizeof(value_size));
+    ptr += sizeof(value_size);
+    memcpy(ptr, value, value_size);
+  }
+
+  std::pair<std::string, std::string> get_key_val(const char* buf, uint32_t buf_size) {
+    std::string key, value;
+    uint32_t key_size, value_size;
+    if (buf_size < sizeof(key_size)) {
+      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)\n"));
+    }
+    memcpy(&key_size, buf, sizeof(key_size));
+    buf += sizeof(key_size);
+    if (buf_size < sizeof(key_size)+key_size) {
+      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size\n"));
+    }
+    key.assign(buf, key_size);
+    buf += key_size;
+    if (buf_size < sizeof(key_size)+key_size+sizeof(value_size)) {
+      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size+sizeof(value_size)\n"));
+    }
+    memcpy(&value_size, buf, sizeof(value_size));
+    buf += sizeof(value_size);
+    if (buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size) {
+      throw std::runtime_error(FormatString("Bad message: buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size\n"));
+    }
+    key.assign(buf, value_size);
+    return {key, value};
+  }
+
+  std::vector<char> buffer_;
+};
+
 Connection<ConnectionType::TCP_SOCKET>::Connection(int socket_fd)
   : socket_fd_(socket_fd), closed_(false)
 {}
@@ -17,15 +59,11 @@ Connection<ConnectionType::TCP_SOCKET>::~Connection() {
 
 void Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size) {
   // Create the message
-  proto::KVPair message;
-  message.set_key(key, key_size);
-  message.set_value(value, value_size);
-
-  // Serialize the message to a buffer
-  std::string buffer = message.SerializeAsString();
+  KvPairMessage message;
+  message.set_key_value(key, key_size, value, value_size);
 
   // Send the size of the message
-  uint32_t message_size = htonl(buffer.size());
+  uint32_t message_size = htonl(message.buffer_.size());
 
   unsigned int total_bytes_sent = 0;
   while (total_bytes_sent < sizeof(uint32_t)) {
@@ -41,8 +79,8 @@ void Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_
 
   // Send the message
   total_bytes_sent = 0;
-  while (total_bytes_sent < buffer.size()) {
-    int bytes_sent = write(socket_fd_, buffer.data() + total_bytes_sent, buffer.size() - total_bytes_sent);
+  while (total_bytes_sent < message.buffer_.size()) {
+    int bytes_sent = write(socket_fd_, message.buffer_.data() + total_bytes_sent, message.buffer_.size() - total_bytes_sent);
     if (bytes_sent <= 0) {
       throw std::runtime_error(FormatString("Failed to send message body: %d\n", errno));
     }
@@ -70,7 +108,7 @@ std::pair<std::string, std::string> Connection<ConnectionType::TCP_SOCKET>::Rece
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
   if (message_size > MAX_MESSAGE_LENGTH) {
-    throw std::runtime_error(FormatString("Illogical message size: %d\n", message_size));
+    throw std::runtime_error(FormatString("Message is too big: %d\n", message_size));
   }
   // Allocate a buffer for the incoming message
   char buffer[message_size];
@@ -84,11 +122,8 @@ std::pair<std::string, std::string> Connection<ConnectionType::TCP_SOCKET>::Rece
     total_bytes_read += bytes_read;
   }
   // Parse the message
-  proto::KVPair message;
-  if (!message.ParseFromArray(buffer, message_size)) {
-    throw std::runtime_error("Failed to parse message\n");
-  }
-  return {message.key(), message.value()};
+  KvPairMessage message;
+  return message.get_key_val(buffer, message_size);
 }
 
 std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> bind(uint16_t& port) {

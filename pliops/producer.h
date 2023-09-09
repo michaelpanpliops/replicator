@@ -49,7 +49,8 @@ private:
 
   std::vector<RangeType> thread_key_ranges_;
   bool kill_; // TODO: atomic
-  void ReaderThread(uint32_t thread_id, std::function<void()> done_callback);
+  void ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id,
+                    std::function<void()> done_callback);
   void StatisticsThread();
   std::vector<RangeType> CalculateThreadKeyRanges(uint32_t max_num_of_threads);
   // Pushes messages to the message queue.
@@ -58,6 +59,9 @@ private:
   // Track the active reading threads, the last active thread does the cleanup
   unsigned int active_reader_threads_count_;
   std::mutex active_reader_threads_mutex_;
+
+  // The replication starting time
+  std::chrono::time_point<std::chrono::system_clock> start_time_;
 };
 
 }

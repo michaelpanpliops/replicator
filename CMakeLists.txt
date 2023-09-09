@@ -13,7 +13,6 @@ if(NOT DEFINED LIBRARY_PATH)
   message(FATAL_ERROR "LIBRARY_PATH for the xdprocks library is not specified")
 endif()
 
-
 include_directories(${INCLUDE_PATH})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/pliops)
@@ -28,7 +27,6 @@ set(SOURCES
     pliops/communication.cc
     pliops/consumer.cc
     pliops/producer.cc
-    pliops/replicator.pb.cc
     )
 
 add_compile_options(-Wno-format-security)
