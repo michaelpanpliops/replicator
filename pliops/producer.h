@@ -28,7 +28,8 @@ public:
   explicit Producer();
   virtual ~Producer();
   void OpenShard(const std::string& shard_path);
-  void Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads, std::function<void()>& done_callback);
+  void Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads,
+              uint32_t parallelism, std::function<void()>& done_callback);
   void Stop();
   void Stats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 

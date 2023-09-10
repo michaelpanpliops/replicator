@@ -170,7 +170,8 @@ std::vector<RangeType> Producer::CalculateThreadKeyRanges(uint32_t max_num_of_th
   return result;
 }
 
-void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads, std::function<void()>& done_callback) {
+void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_threads,
+                      uint32_t parallelism, std::function<void()>& done_callback) {
   thread_key_ranges_ = CalculateThreadKeyRanges(max_num_of_threads);
   log_message(FormatString("Shard is split into %d read ranges\n", thread_key_ranges_.size()));
 
@@ -195,8 +196,8 @@ void Producer::Start(const std::string& ip, uint16_t port, uint32_t max_num_of_t
 
   active_reader_threads_count_ = threads_per_shard;
   for (uint32_t thread_id = 0; thread_id < threads_per_shard; ++thread_id) {
-    reader_threads_.push_back(std::thread([this, thread_id, done_callback]() {
-                this->ReaderThread(16, thread_id, done_callback);
+    reader_threads_.push_back(std::thread([this, parallelism, thread_id, done_callback]() {
+                this->ReaderThread(parallelism, thread_id, done_callback);
     }));
   }
 }

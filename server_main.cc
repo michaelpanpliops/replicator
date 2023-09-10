@@ -10,12 +10,14 @@ using namespace std::literals;
 
 
 static void PrintHelp() {
-  std::cout << "Usage: server_exe -p path -a ip_addr" << std::endl;
+  std::cout << "Usage: server_exe -p path -a ip_addr -i parallelism" << std::endl;
   std::cout << "  -p the path to the db directory" << std::endl;
   std::cout << "  -a the ip address of the client" << std::endl;
+  std::cout << "  -i internal iterator parallelism" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], std::string& path, std::string& ip) {
+static void ParseArgs(int argc, char *argv[], int& parallelism, std::string& path, std::string& ip) {
+  parallelism = -1;
   path.clear();
   ip.clear();
 
@@ -28,6 +30,10 @@ static void ParseArgs(int argc, char *argv[], std::string& path, std::string& ip
       ip = argv[++i];
       continue;
     }
+    if (!strcmp("-i", argv[i]) && i+1 < argc) {
+      parallelism = atoi(argv[++i]);
+      continue;
+    }
     if (!strcmp("-h", argv[i])) {
       PrintHelp();
       exit(0);
@@ -37,20 +43,21 @@ static void ParseArgs(int argc, char *argv[], std::string& path, std::string& ip
     exit(1);
   }
 
-  if (path.empty() || ip.empty()) {
+  if (parallelism < 0 || path.empty() || ip.empty()) {
     PrintHelp();
     exit(1);
   }
 }
 
 int main(int argc, char* argv[]) {
+  int parallelism;
   std::string src_path;
   std::string client_ip;
-  ParseArgs(argc, argv, src_path, client_ip);
+  ParseArgs(argc, argv, parallelism, src_path, client_ip);
 
   try {
     RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
-    ProvideCheckpoint(rpc, src_path, client_ip);
+    ProvideCheckpoint(rpc, src_path, client_ip, parallelism);
   } catch (const std::exception& e) {
     log_message(FormatString("ERROR\n\t%s\n", e.what()));
     return 1;
