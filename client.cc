@@ -12,17 +12,18 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 
 CheckpointConsumer::CheckpointConsumer(
   const std::string& path, const std::string &host, int shard,
-  const std::string &name, const std::string &snapshot,
+  const std::string &name, const uint32_t &snapshot,
   std::function<Status()> on_finished)
   : name_(name), host_(host)
   // , sync_path_(host + "-->" + GlobalData::GetInstance()->local_ip),
   , shard_(shard), thread_id_(0)
 {
+  checkpoint_id_ = snapshot;
   replication_consumer_ = std::make_unique<Replicator::Consumer>();
 }
 
 // Send checkpoint request to the server
-void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t checkpoint_id, uint32_t size)
+void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id, uint32_t& size)
 {
   try {
     CreateCheckpointRequest req{shard};
@@ -36,11 +37,11 @@ void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t checkpoint_id, u
 }
 
 // Send start streaming request to the server
-void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id, uint16_t port,
+void StartStreaming(RpcChannel &rpc, uint16_t port,
                     uint32_t num_threads, ServerStatus& status)
 {
   try {
-    StartStreamingRequest req{checkpoint_id, num_threads, port };
+    StartStreamingRequest req{consumer_->CheckpointID(), num_threads, port };
     StartStreamingResponse res{};
     rpc.SendCommand(req, res);
     status = res.status;
@@ -53,7 +54,7 @@ void StartStreaming(RpcChannel &rpc, uint32_t checkpoint_id, uint16_t port,
 void GetStatus(RpcChannel& rpc, ServerStatus& status, uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
   try {
-    GetStatusRequest req;
+    GetStatusRequest req{consumer_->CheckpointID()};
     GetStatusResponse res;
     rpc.SendCommand(req, res);
     status = res.status;
@@ -66,7 +67,8 @@ void GetStatus(RpcChannel& rpc, ServerStatus& status, uint64_t& num_kv_pairs, ui
 
 // Main entry function 
 // Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
-void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path)
+void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
+                        int32_t desired_num_of_threads)
 {
   // Request checkpoint from the server
   uint32_t checkpoint_id;
@@ -87,18 +89,18 @@ void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_pa
 
   // Create consumer object
   consumer_ = std::make_unique<CheckpointConsumer>(
-                            "tmp_path", "host", shard, name, std::to_string(checkpoint_id),
+                            "tmp_path", "host", shard, name, checkpoint_id,
                             []()->Status { return Status(); });  
 
   // Start consumer
   // TODO: add calculation of number of threads
-  uint32_t num_of_threads = 1;
+  // uint32_t num_of_threads = 2;//
   uint16_t port;
   consumer_->ReplicationConsumer().Start(replica_path, port);
 
   // Tell server to start streaming
   ServerStatus server_status;
-  StartStreaming(rpc, checkpoint_id, port, num_of_threads, server_status);
+  StartStreaming(rpc, port, desired_num_of_threads, server_status);
 
   if (server_status != ServerStatus::IN_PROGRESS) {
     throw std::runtime_error(FormatString("Server responded with error to StartStreaming"));
@@ -111,13 +113,16 @@ bool CheckReplicationStatus(RpcChannel& rpc)
   ServerStatus server_status;
   uint64_t num_kv_pairs, num_bytes;
   GetStatus(rpc, server_status, num_kv_pairs, num_bytes);
-  log_message(FormatString("ERROR\n\tnum_kv_pairs = %lld, num_bytes = %lld\n", num_kv_pairs, num_bytes));
+  log_message(FormatString("Transferred so far:\n\tnum_kv_pairs = %lld, num_bytes = %lld\n",
+                            num_kv_pairs, num_bytes));
 
   if (server_status == ServerStatus::ERROR) {
     throw std::runtime_error(FormatString("Server responded with error to GetStatus"));
   }
 
   if (server_status == ServerStatus::DONE) {
+    consumer_->ReplicationConsumer().Finish();
+    consumer_.reset();
     return true;
   }
 

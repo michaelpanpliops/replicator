@@ -13,8 +13,10 @@ Consumer::Consumer()
 {}
 
 Consumer::~Consumer() {
-  shard_->Close();
-  delete shard_;
+  if (shard_) {
+    shard_->Close();
+    delete shard_;
+  }
 }
 
 void Consumer::WriterThread() {
@@ -112,12 +114,23 @@ void Consumer::Start(const std::string& replica_path, uint16_t& port) {
 
 void Consumer::Stop()
 {
-  kill_ = true;
+//   kill_ = true;
+//   message_queue_->wait_enqueue({"", ""}); // Empty element signals end of messages.
+}
 
+void Consumer::Finish()
+{
+  log_message("Waiting for consumer to finish\n");
+
+  // TODO: add waiting time for completion
   communication_thread_->join();
   writer_thread_->join();
 
-  log_message("Done.\n");
+  shard_->Close();
+  delete shard_;
+  shard_=nullptr;
+
+  log_message("Consumer finished\n");
 }
 
 }

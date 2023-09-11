@@ -25,6 +25,8 @@ public:
   virtual ~Consumer();
   void Start(const std::string& replica_path, uint16_t& port);
   void Stop();
+  void Finish();
+
 private:
   // Socket to listen for an incomming connection
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;

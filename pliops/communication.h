@@ -16,7 +16,7 @@
 #include <time.h>
 
 #include "log.h"
-#include "replicator.pb.h"
+
 
 namespace Replicator {
 
