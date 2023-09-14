@@ -5,33 +5,48 @@
 #include <atomic>
 #include <functional>
 
-#include "rocksdb/status.h"
-
 #include "rpc.h"
 #include "producer.h"
 
-void ProvideCheckpoint(RpcChannel& rpc, const std::string &src_path, const std::string& client_ip,
-                        int parallelism);
 
-class CheckpointProducer : public std::enable_shared_from_this<CheckpointProducer>
+// The main function for shard replication
+int ProvideCheckpoint(RpcChannel& rpc,
+                      const std::string &src_path,
+                      const std::string& client_ip,
+                      int parallelism);
+
+class CheckpointProducer
 {
 public:
   CheckpointProducer(const std::string &src_path, const std::string& client_ip, int parallelism);
-  ~CheckpointProducer(){}
+  ~CheckpointProducer() {}
 
-  void CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  void StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
-  bool GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
-  void ReplicationDone();
-  void Stop() { producer_->Stop(); }
+  // Client requests processing methods
+  int CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
+  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
+  int GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+
+  // Synchronization and cleanup
+  void ReplicationDone(ProducerState state, const std::string& error);
+  int WaitForCompletion(uint32_t timeout_msec);
+  int DestroyCheckpoint();
+
+  // The client_done_ is set to true after sending client ERROR or DONE
+  bool IsClientDone() { return client_done_; };
 
 private:
   const std::string& src_path_;
   const std::string& client_ip_;
-  std::atomic<bool> done_;
   const int parallelism_;
   uint32_t checkpoint_id_;
   std::string checkpoint_path_;
+  bool client_done_ = false;
+
+  // Producer state and its error are updated in the ReplicationDone callback
+  ProducerState producer_state_;
+  std::string producer_error_;
+  std::mutex producer_state_mutex_;
+  std::condition_variable producer_state_cv_;
 
   // Pliops replication producer
   std::unique_ptr<Replicator::Producer> producer_;  

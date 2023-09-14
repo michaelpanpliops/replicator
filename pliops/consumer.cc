@@ -1,5 +1,6 @@
 #include <mutex>
 #include <filesystem>
+#include <future>
 
 #include "rocksdb/db.h"
 
@@ -30,43 +31,77 @@ void Consumer::WriterThread() {
     std::string& value = message.second;
     if (key.empty()) {
       // message buffer is closed, finish.
-      return;
+      break;
     }
+
     // Insert KV to DB
     ROCKSDB_NAMESPACE::WriteOptions wo;
     wo.disableWAL = true;
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
-      throw std::runtime_error(FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
+      log_message(FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
+      SetState(ConsumerState::ERROR, "");
+      return;
     }
+
+    statistics_.num_kv_pairs++; // atomic
+    statistics_.num_bytes.fetch_add(key.size() + value.size()); // atomic
   }
+
+  // Close the DB
+  auto status = shard_->Close();
+  delete shard_;
+  shard_ = nullptr;
+  if (!status.ok()) {
+    log_message(FormatString("shard_->Close failed, reason: %s\n", status.ToString()));
+    SetState(ConsumerState::ERROR, "");
+    return;
+  }
+
+  // Print out replication performance metrics
+  log_message(FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n",
+              statistics_.num_kv_pairs.load(), statistics_.num_bytes.load()));
+  auto current_time = std::chrono::system_clock::now();
+  auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time_);
+  log_message(FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
+  log_message(FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
+
+  SetState(ConsumerState::DONE, "");
+
   log_message(FormatString("Writer thread ended\n"));
 }
 
-void Consumer::CommunicationThread() {
+void Consumer::CommunicationThread()
+{
   log_message(FormatString("Communication thread started.\n"));
-  auto& listen_s = connection_;
-  auto connection = accept(listen_s);
-  std::string key, value;
-  while(!kill_){
-    try {
-      std::tie(key, value) = connection->Receive();
-      message_queue_->wait_enqueue({key, value});
-    } catch (const ConnectionClosed&) {
-      // For server writer threads, this is normal, the sender side might have finished sending replication data.
-      log_message("Communication thread: Connection closed.\n");
-      message_queue_->wait_enqueue({"", ""}); // Empty element signals end of messages.
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
+  auto rc = accept(*connection_, connection);
+  if (rc) {
+    log_message(FormatString("Communication thread: accept failed\n"));
+    SetState(ConsumerState::ERROR, "");
+    return;
+  }
 
-      // TODO: set kill_
-      // TODO: update status
-      break;
+  std::string key, value;
+  while(!kill_) {
+    rc = connection->Receive(key, value);
+    if (rc) {
+      log_message("Communication thread: recv failed.\n");
+      SetState(ConsumerState::ERROR, "");
+      return;
+    }
+    message_queue_->wait_enqueue({key, value});
+    if (key.empty()) {
+      // Finish thread
+      return;
     }
   }
+  log_message(FormatString("Communication thread ended.\n"));
 }
 
-ROCKSDB_NAMESPACE::DB* Consumer::OpenReplica(const std::string& replica_path) {
+int Consumer::OpenReplica(const std::string& replica_path)
+{
   unsigned int shard_id = 0;
-  ROCKSDB_NAMESPACE::DB* db;
   ROCKSDB_NAMESPACE::Options options;
   options.create_if_missing = true;
   options.error_if_exists = true;
@@ -81,56 +116,125 @@ ROCKSDB_NAMESPACE::DB* Consumer::OpenReplica(const std::string& replica_path) {
   }
   auto status = ROCKSDB_NAMESPACE::DB::Open(options,
                                             shard_path,
-                                            &db);
+                                            &shard_);
   if (!status.ok()) {
-    throw std::runtime_error(FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
+    log_message(FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
+    return -1;
   }
-  return db;
+
+  return 0;
 }
 
-void Consumer::Start(const std::string& replica_path, uint16_t& port) {
-  //
-  shard_ = OpenReplica(replica_path);
+int Consumer::Start(const std::string& replica_path, uint16_t& port,
+                    std::function<void(ConsumerState, const std::string&)>& done_callback)
+{
+  done_callback_ = done_callback;
+
+  // Open replica
+  auto rc = OpenReplica(replica_path);
+  if (rc || !shard_) {
+    log_message(FormatString("OpenReplica failed\n"));
+    return -1;
+  }
 
   // Listen for incoming connection
-  connection_ = bind(port);
+  rc = bind(port, connection_);
+  if (rc) {
+    log_message(FormatString("Socket binding failed\n"));
+    return -1;
+  }
 
-  // For each shard, we allocate the same number of writer threads.
-  // We already made sure the total number of threads is divisible by the number of shards.
-  // We start the writer threads and the communication threads for each shard
-  log_message("Starting writer threads\n");
   message_queue_ = std::make_unique<ServerMessageQueue>(SERVER_MESSAGE_QUEUE_CAPACITY);
+  start_time_ = std::chrono::system_clock::now();
 
-  // Start writer threads
+  // Start writer thread
+  log_message("Starting writer thread\n");
   writer_thread_ = std::make_unique<std::thread>([this]() {
     this->WriterThread();
   });
 
   // Start the communication thread
+  log_message("Starting communication thread\n");
   communication_thread_ =  std::make_unique<std::thread>([this]() {
     this->CommunicationThread();
   });
+
+  return 0;
 }
 
-void Consumer::Stop()
+void Consumer::StopImpl()
 {
-//   kill_ = true;
-//   message_queue_->wait_enqueue({"", ""}); // Empty element signals end of messages.
-}
+  // This is a best effort stopping, we will try to stop the threads
+  // and close the shard, but won't report any error if something goes wrong
 
-void Consumer::Finish()
-{
-  log_message("Waiting for consumer to finish\n");
-
-  // TODO: add waiting time for completion
+  // Tell threads to exit
+  kill_ = true;
   communication_thread_->join();
+
+  // We need to signal writer thread with poison pill
+  // because it could be waiting on queue
+  message_queue_->wait_enqueue({"", ""});
   writer_thread_->join();
+  connection_.reset();
+  message_queue_.reset();
 
-  shard_->Close();
-  delete shard_;
-  shard_=nullptr;
+  // Close shard
+  if (shard_) {
+    shard_->Close();
+    delete shard_;
+    shard_=nullptr;
+  }
+}
 
-  log_message("Consumer finished\n");
+int Consumer::Stop()
+{
+  using namespace std::literals;
+
+  // Move state into STOPPED, so we won't get any ERROR/DONE notifications from now
+  SetState(ConsumerState::STOPPED, "");
+
+  std::future<void>* future = new std::future<void>;
+  *future = std::async(std::launch::async, &Consumer::StopImpl, this);
+  if (future->wait_for(10s) == std::future_status::timeout) {
+    log_message("Stop failed, some threads are stuck.\n");
+    // If the app will try destroy the Producer object, it will crash
+    return -1;
+  } else {
+    delete future;
+  }
+
+  log_message("Consumer finished its jobs\n");
+  return 0;
+}
+
+int Consumer::GetState(ConsumerState& state, std::string& error)
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  state = state_;
+  error = error_;
+  return 0;
+}
+
+int Consumer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
+{
+  num_kv_pairs = statistics_.num_kv_pairs;
+  num_bytes = statistics_.num_bytes;
+  return 0;
+}
+
+void Consumer::SetState(const ConsumerState& state, const std::string& error)
+{
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Never overwrite a state if it is already in a final state
+  if (IsFinalState(state_)) {
+    return;
+  }
+  state_ = state;
+  error_ = error;
+  // Call the callback for final states only
+  if (IsFinalState(state_)) {
+    done_callback_(state_, error_);
+  }
 }
 
 }

@@ -62,20 +62,23 @@ int main(int argc, char* argv[]) {
   std::string server_ip;
   ParseArgs(argc, argv, shard, threads, dsp_path, server_ip);
 
-  try {
-    RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
-    RestoreCheckpoint(rpc, shard, dsp_path, threads);
-
-    bool done = false;
-    while (!done) {
-      std::this_thread::sleep_for(10s);
-      done = CheckReplicationStatus(rpc);
-    }
-  } catch (const std::exception& e) {
-    log_message(FormatString("ERROR\n\t%s\n", e.what()));
-    return 1;
+  RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
+  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads);
+  if (rc) {
+    log_message(FormatString("ReplicateCheckpoint failed\n"));
+    exit(1);
   }
+
+  bool done = false;
+  while (!done) {
+    std::this_thread::sleep_for(10s);
+    rc = CheckReplicationStatus(rpc, done);
+    if (rc) {
+      log_message(FormatString("CheckReplicationStatus failed\n"));
+      exit(1);
+    }
+  }
+
   log_message("All done!\n");
-  // while(true) { std::this_thread::sleep_for(60s); }
   return 0;
 }

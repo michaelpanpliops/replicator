@@ -16,15 +16,15 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include "defs.h"
 #include "log.h"
+
 
 using namespace Replicator;
 
-#pragma pack(push, 0)
+using ServerState = Replicator::State;
 
-enum class ServerStatus : uint32_t {
-  IN_PROGRESS, DONE, ERROR
-};
+#pragma pack(push, 0)
 
 struct CreateCheckpointRequest {
   uint32_t shard_number;
@@ -32,7 +32,6 @@ struct CreateCheckpointRequest {
 
 struct CreateCheckpointResponse {
   uint32_t checkpoint_id;  
-  uint32_t db_size_estimation;  
 };
 
 struct StartStreamingRequest {
@@ -42,7 +41,7 @@ struct StartStreamingRequest {
 };
 
 struct StartStreamingResponse {
-  ServerStatus status;
+  ServerState state;
 };
 
 struct GetStatusRequest {
@@ -50,7 +49,7 @@ struct GetStatusRequest {
 };
 
 struct GetStatusResponse {
-  ServerStatus status;
+  ServerState state;
   uint64_t num_kv_pairs;
   uint64_t num_bytes;
 };
@@ -66,45 +65,39 @@ public:
   ~RpcChannel();
 
   template<typename Tin, typename Tout>
-  void SendCommand(const Tin& in, Tout& out)
+  int SendCommand(const Tin& in, Tout& out)
   {
     if (::send(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      throw std::runtime_error(FormatString("Rpc: Send failed: %d", errno));
+      log_message(FormatString("Rpc: Send failed: %d\n", errno));
+      return -1;
     }
     if (::recv(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      throw std::runtime_error(FormatString("Rpc: Recv failed: %d", errno));
+      log_message(FormatString("Rpc: Recv failed: %d\n", errno));
+      return -1;
     }
+    return 0;
   }
 
   template<typename Tin, typename Tout>
-  void ProcessCommand(std::function<void(const Tin& in, Tout& out)>& callback)
+  int ProcessCommand(std::function<int(const Tin& in, Tout& out)>& callback)
   {
     Tin in;
     Tout out;
 
     if (::recv(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      throw std::runtime_error(FormatString("Rpc: Recv failed: %d", errno));
-    }
-    callback(in, out);
-    if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      throw std::runtime_error(FormatString("Rpc: Send failed: %d", errno));
-    }
-  }
-
-  template<typename Tin, typename Tout>
-  bool ProcessCommand(std::function<bool(const Tin& in, Tout& out)>& callback)
-  {
-    Tin in;
-    Tout out;
-
-    if (::recv(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      throw std::runtime_error(FormatString("Rpc: Recv failed: %d", errno));
+      log_message(FormatString("Rpc: Recv failed: %d\n", errno));
+      return -1;
     }
     auto rc = callback(in, out);
-    if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      throw std::runtime_error(FormatString("Rpc: Send failed: %d", errno));
+    if (rc) {
+      log_message(FormatString("Rpc: Send failed: callback\n"));
+      return -1;
     }
-    return rc;
+    if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
+      log_message(FormatString("Rpc: Send failed: %d\n", errno));
+      return -1;
+    }
+    return 0;
   }
 
   int socket_;
