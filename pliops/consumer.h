@@ -5,11 +5,14 @@
 #include <filesystem>
 
 #include "communication.h"
+#include "defs.h"
 #include "rocksdb/db.h"
 #include "utils/ring_buffer.h"
 
 
 namespace Replicator {
+
+using ConsumerState = Replicator::State;
 
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
 constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
@@ -23,12 +26,17 @@ class Consumer {
 public:
   explicit Consumer();
   virtual ~Consumer();
-  void Start(const std::string& replica_path, uint16_t& port);
-  void Stop();
-  void Finish();
+  int Start(const std::string& replica_path, uint16_t& port,
+            std::function<void(ConsumerState, const std::string&)>& done_callback);
+  int Stop();
+  int GetState(ConsumerState& state, std::string& error);
+  int GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
-  // Socket to listen for an incomming connection
+  // Callback to be called on completion/error
+  std::function<void(ConsumerState, const std::string&)> done_callback_;
+
+  // Socket to listen for an incoming connection
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;
 
   // Writer and communication threads
@@ -38,17 +46,29 @@ private:
   // Statistics
   Statistics statistics_;
  
-  // The KV pairs received over the network. The writer threads pull messages out of the queue.
+  // The KV pairs received over the network. The writer pull messages out of the queue.
   std::unique_ptr<ServerMessageQueue> message_queue_;
-  ROCKSDB_NAMESPACE::DB* shard_ = nullptr;
 
-  // Signal all threads in the server to finish.
-  bool kill_;
-  // Writes data to destination DBs
+  // DB
+  ROCKSDB_NAMESPACE::DB* shard_ = nullptr;
+  int OpenReplica(const std::string& replica_path);
+
+  // Signal threads to exit
+  std::atomic<bool> kill_;
+
+  // Worker threads
   void WriterThread();
-  // Pulls messages to the message queue.
   void CommunicationThread();
-  ROCKSDB_NAMESPACE::DB* OpenReplica(const std::string& replica_path);
+  void StopImpl();
+
+  // The replication starting time
+  std::chrono::time_point<std::chrono::system_clock> start_time_;
+
+  // State and error message
+  ConsumerState state_ = ConsumerState::IDLE;
+  std::string error_;
+  std::mutex state_mutex_;
+  void SetState(const ConsumerState& state, const std::string& error);
 };
 
 }

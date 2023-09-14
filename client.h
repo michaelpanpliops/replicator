@@ -6,36 +6,35 @@
 #include <functional>
 
 #include "rocksdb/status.h"
-
 #include "rpc.h"
 #include "consumer.h"
 
 
-void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
+int ReplicateCheckpoint(RpcChannel& rpc,
+                        int32_t shard,
+                        const std::string &dst_path,
                         int32_t desired_num_of_threads);
-bool CheckReplicationStatus(RpcChannel& rpc);
+int CheckReplicationStatus(RpcChannel& rpc, bool& done);
 
-class CheckpointConsumer : public std::enable_shared_from_this<CheckpointConsumer>
+class CheckpointConsumer
 {
 public:
-  CheckpointConsumer( const std::string &path, const std::string &host, int shard,
-                      const std::string &name, const uint32_t &snapshot,
-                      std::function<ROCKSDB_NAMESPACE::Status()> on_finished);
-  ~CheckpointConsumer() {
-  }
+  CheckpointConsumer();
+  ~CheckpointConsumer() {}
 
-  Replicator::Consumer& ReplicationConsumer() { return *replication_consumer_; }
-  uint32_t CheckpointID() { return checkpoint_id_; }
+  // Accessors
+  Replicator::Consumer& ConsumerImpl() { return *replication_consumer_; }
+
+  // Synchronization and cleanup
+  void ReplicationDone(ConsumerState state, const std::string& error);
+  int WaitForCompletion(uint32_t timeout_msec);
 
 private:
-  std::string name_;
-  std::string host_;
-  std::string sync_path_;
-  int shard_;
-  int thread_id_;
-
-  std::string path_;
-  uint32_t checkpoint_id_;
+  // Consumer state and its error are updated in the ReplicationDone callback
+  ConsumerState consumer_state_;
+  std::string consumer_error_;
+  std::mutex consumer_state_mutex_;
+  std::condition_variable consumer_state_cv_;
 
   // Pliops replication consumer
   std::unique_ptr<Replicator::Consumer> replication_consumer_;

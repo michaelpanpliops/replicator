@@ -8,127 +8,222 @@ using namespace ROCKSDB_NAMESPACE;
 
 namespace {
 std::unique_ptr<CheckpointConsumer> consumer_;
+uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer(
-  const std::string& path, const std::string &host, int shard,
-  const std::string &name, const uint32_t &snapshot,
-  std::function<Status()> on_finished)
-  : name_(name), host_(host)
-  // , sync_path_(host + "-->" + GlobalData::GetInstance()->local_ip),
-  , shard_(shard), thread_id_(0)
+CheckpointConsumer::CheckpointConsumer()
 {
-  checkpoint_id_ = snapshot;
   replication_consumer_ = std::make_unique<Replicator::Consumer>();
 }
 
-// Send checkpoint request to the server
-void CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id, uint32_t& size)
+void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string& error)
 {
-  try {
-    CreateCheckpointRequest req{shard};
-    CreateCheckpointResponse res{};
-    rpc.SendCommand(req, res);
-    checkpoint_id = res.checkpoint_id;
-    size = res.db_size_estimation;
-  } catch(const std::exception& e) {
-    throw std::runtime_error(FormatString("CreateCheckpoint:\n\t%s", e.what()));
+  // Only mark here that the replication is done
+  // The cleanup must be done a different thread (we cannot join threads from themself)
+  std::lock_guard<std::mutex> lock(consumer_state_mutex_);
+  log_message(FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
+  consumer_state_ = state;
+  consumer_error_ = error;
+  consumer_state_cv_.notify_all();
+}
+
+int CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
+{
+  using namespace std::literals;
+
+  // Wait till the consumer is done. 
+  log_message(FormatString("WaitForCompletion: %d msec\n", timeout_msec));
+  std::unique_lock lock(consumer_state_mutex_);
+  auto rc = consumer_state_cv_.wait_for(lock, 1ms*timeout_msec, [&] { 
+    return consumer_state_ == ConsumerState::ERROR || consumer_state_ == ConsumerState::DONE;
+  });
+
+  return rc ? 0 : -1;
+}
+
+// Send checkpoint request to the server
+int CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id)
+{
+  CreateCheckpointRequest req{shard};
+  CreateCheckpointResponse res{};
+  auto rc = rpc.SendCommand(req, res);
+  if (rc) {
+    log_message(FormatString("rpc.SendCommand failed\n"));
+    return -1;
   }
+  checkpoint_id_ = res.checkpoint_id;
+  return 0;
 }
 
 // Send start streaming request to the server
-void StartStreaming(RpcChannel &rpc, uint16_t port,
-                    uint32_t num_threads, ServerStatus& status)
+int StartStreaming(RpcChannel &rpc, uint16_t port,
+                    uint32_t num_threads, ServerState& state)
 {
-  try {
-    StartStreamingRequest req{consumer_->CheckpointID(), num_threads, port };
-    StartStreamingResponse res{};
-    rpc.SendCommand(req, res);
-    status = res.status;
-  } catch(const std::exception& e) {
-    throw std::runtime_error(FormatString("StartStreaming:\n\t%s", e.what()));
+  StartStreamingRequest req{checkpoint_id_, num_threads, port };
+  StartStreamingResponse res{};
+  auto rc = rpc.SendCommand(req, res);
+  if (rc) {
+    log_message(FormatString("rpc.SendCommand failed\n"));
+    return -1;
   }
+  state = res.state;
+  return 0;
 }
 
 // Send status request to the server
-void GetStatus(RpcChannel& rpc, ServerStatus& status, uint64_t& num_kv_pairs, uint64_t& num_bytes)
+int GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
-  try {
-    GetStatusRequest req{consumer_->CheckpointID()};
-    GetStatusResponse res;
-    rpc.SendCommand(req, res);
-    status = res.status;
-    num_kv_pairs = res.num_kv_pairs;
-    num_bytes = res.num_bytes;
-  } catch(const std::exception& e) {
-    throw std::runtime_error(FormatString("GetStatus:\n\t%s", e.what()));
+  GetStatusRequest req{checkpoint_id_};
+  GetStatusResponse res;
+  auto rc = rpc.SendCommand(req, res);
+  if (rc) {
+    log_message(FormatString("rpc.SendCommand failed\n"));
+    return -1;
   }
+  state = res.state;
+  num_kv_pairs = res.num_kv_pairs;
+  num_bytes = res.num_bytes;
+  return 0;
 }
 
 // Main entry function 
 // Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
-void RestoreCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
+int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
                         int32_t desired_num_of_threads)
 {
-  // Request checkpoint from the server
+  // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
-  uint32_t size;
-  CreateCheckpoint(rpc, shard, checkpoint_id, size);
+  auto rc = CreateCheckpoint(rpc, shard, checkpoint_id);
+  if (rc) {
+    log_message(FormatString("ReplicateCheckpoint failed\n"));
+    return -1;
+  }
 
   // Create path for the replica
   std::string name = std::to_string(shard) + "_" + "replica";
-  auto replica_path = std::filesystem::path(dst_path)/name;
+  std::string replica_path = std::filesystem::path(dst_path)/name;
+  log_message(FormatString("Replica path: %s\n", replica_path));
+
+  // Cleanup replica path
   if (!std::filesystem::exists(replica_path)) {
     std::filesystem::create_directories(replica_path);
   } if (!std::filesystem::is_empty(replica_path)) {
     auto s = DestroyDB(replica_path, Options());
     if (!s.ok()) {
-      throw std::runtime_error(FormatString("DestroyDB failed: %s", s.ToString()));
+      log_message(FormatString("DestroyDB failed: %s\n", s.ToString()));
+      return -1;
     }
   }
 
   // Create consumer object
-  consumer_ = std::make_unique<CheckpointConsumer>(
-                            "tmp_path", "host", shard, name, checkpoint_id,
-                            []()->Status { return Status(); });  
+  consumer_ = std::make_unique<CheckpointConsumer>();  
 
-  // Start consumer
-  // TODO: add calculation of number of threads
-  // uint32_t num_of_threads = 2;//
+  // Bind ReplicationDone callback
+  using namespace std::placeholders;
+  std::function<void(ConsumerState, const std::string&)> done_cb =
+    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1, _2); 
+
+  // Start consumer and get the port number from it
   uint16_t port;
-  consumer_->ReplicationConsumer().Start(replica_path, port);
-
-  // Tell server to start streaming
-  ServerStatus server_status;
-  StartStreaming(rpc, port, desired_num_of_threads, server_status);
-
-  if (server_status != ServerStatus::IN_PROGRESS) {
-    throw std::runtime_error(FormatString("Server responded with error to StartStreaming"));
+  rc = consumer_->ConsumerImpl().Start(replica_path, port, done_cb);
+  if (rc) {
+    log_message(FormatString("Consumer::Start failed\n"));
+    return -1;
   }
+
+  // RPC call: Tell server to start streaming
+  ServerState server_status;
+  rc = StartStreaming(rpc, port, desired_num_of_threads, server_status);
+  if (rc) {
+    log_message(FormatString("ReplicateCheckpoint failed\n"));
+    return -1;
+  }
+
+  if (server_status != ServerState::IN_PROGRESS) {
+    log_message(FormatString("Server responded with error to StartStreaming\n"));
+    return -1;
+  }
+
+  return 0;
 }
 
 // Check status, should be called periodically, returns true if done
-bool CheckReplicationStatus(RpcChannel& rpc)
+int CheckReplicationStatus(RpcChannel& rpc, bool& done)
 {
-  ServerStatus server_status;
-  uint64_t num_kv_pairs, num_bytes;
-  GetStatus(rpc, server_status, num_kv_pairs, num_bytes);
-  log_message(FormatString("Transferred so far:\n\tnum_kv_pairs = %lld, num_bytes = %lld\n",
-                            num_kv_pairs, num_bytes));
+  // --- check the consumer state --- //
 
-  if (server_status == ServerStatus::ERROR) {
-    throw std::runtime_error(FormatString("Server responded with error to GetStatus"));
+  // Get the state from the consumer
+  ConsumerState consumer_state;
+  std::string error;
+  auto rc = consumer_->ConsumerImpl().GetState(consumer_state, error);
+  if (rc) {
+    log_message(FormatString("Consumer::GetState failed\n"));
+    return -1;
   }
 
-  if (server_status == ServerStatus::DONE) {
-    consumer_->ReplicationConsumer().Finish();
+  // Get statistics from the consumer
+  uint64_t client_num_kv_pairs, client_num_bytes;
+  rc = consumer_->ConsumerImpl().GetStats(client_num_kv_pairs, client_num_bytes);
+  if (rc) {
+    log_message(FormatString("Consumer::GetStats failed\n"));
+    return -1;
+  }
+  // Print statistics
+  log_message(FormatString(
+              "Received by the client: num_kv_pairs = %lld, num_bytes = %lld, state = %s\n",
+              client_num_kv_pairs, client_num_bytes, ToString(consumer_state)));
+
+#define CHECK_PRODUCER_STATE 
+#ifdef CHECK_PRODUCER_STATE
+  // Cleanup and return if the consumer it is done
+  if (IsFinalState(consumer_state)) {
+    rc = consumer_->ConsumerImpl().Stop();
+    if (rc) {
+      log_message(FormatString("Consumer::Stop failed\n"));
+      return -1;
+    }
     consumer_.reset();
-    return true;
+    done = true;
+  }
+#endif
+
+  // --- check the server state --- //
+
+  // RPC call: get replication status from server
+  ServerState server_state;
+  uint64_t server_num_kv_pairs, server_num_bytes;
+  rc = GetStatus(rpc, server_state, server_num_kv_pairs, server_num_bytes);
+  if (rc) {
+    log_message(FormatString("GetStatus failed\n"));
+    return -1;
   }
 
-  // TODO
-  // -> possible responses { in_progress, done, error }
-  // also check replication_server_ status
-  // then proceed based on the collected statuses
-  return false;
+  // Print statistics
+  log_message(FormatString(
+              "Transferred by the server: num_kv_pairs = %lld, num_bytes = %lld, state = %s\n",
+              server_num_kv_pairs, server_num_bytes, ToString(server_state)));
+
+#define CHECK_SERVER_STATE 
+#ifdef CHECK_SERVER_STATE
+  // Cleanup and return if the server it is done
+  if (IsFinalState(server_state) && !done) {
+    // Wait for consumer to complete
+    auto wait_rc = consumer_->WaitForCompletion(1000);
+    if (wait_rc) {
+      log_message(FormatString("CheckpointProducer::WaitForCompletion failed\n"));
+      // return -1; - do not stop here, try to cleanup
+    }
+
+    rc = consumer_->ConsumerImpl().Stop();
+    if (rc) {
+      log_message(FormatString("Consumer::Stop failed\n"));
+      return -1;
+    }
+    consumer_.reset();
+    done = true;
+    return wait_rc ? -1 : 0;
+  }
+#endif
+
+  return 0;
 }

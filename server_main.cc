@@ -55,14 +55,13 @@ int main(int argc, char* argv[]) {
   std::string client_ip;
   ParseArgs(argc, argv, parallelism, src_path, client_ip);
 
-  try {
-    RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
-    ProvideCheckpoint(rpc, src_path, client_ip, parallelism);
-  } catch (const std::exception& e) {
-    log_message(FormatString("ERROR\n\t%s\n", e.what()));
-    return 1;
+  RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
+  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism);
+  if (rc) {
+    log_message(FormatString("ProvideCheckpoint failed\n"));
+    exit(1);
   }
+
   log_message("All done!\n");
-  // while(true) { std::this_thread::sleep_for(60s); }
   return 0;
 }
