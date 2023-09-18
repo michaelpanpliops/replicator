@@ -7,7 +7,7 @@ uint16_t client_port = 44445;
 uint16_t server_port = 44444;
 }
 
-RpcChannel::RpcChannel(Pier pier, const std::string& pier_ip)
+RpcChannel::RpcChannel(Pier pier, const std::string& pier_ip, uint64_t timeout)
 {
   uint16_t local_port = (pier == Pier::Client ? client_port : server_port); 
   uint16_t remote_port = (pier == Pier::Client ? server_port : client_port); 
@@ -31,6 +31,7 @@ RpcChannel::RpcChannel(Pier pier, const std::string& pier_ip)
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = inet_addr(pier_ip.c_str());
   addr.sin_port = htons(remote_port);
+  //add timeout handle
 
   if (::connect(socket_, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     throw std::runtime_error(FormatString("Rpc: Failed to connect to the server: %d", errno));

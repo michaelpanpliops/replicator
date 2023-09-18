@@ -14,10 +14,11 @@ static void PrintHelp() {
   std::cout << "  -s the index of the shard" << std::endl;
   std::cout << "  -p the path to the replication directory" << std::endl;
   std::cout << "  -a the ip address of the server" << std::endl;
-  std::cout << "  -t desired number of threads" << std::endl;
+  std::cout << "  -n desired number of threads" << std::endl;
+  std::cout << "  -t timeout [seconds]" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip) {
+static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip, uint64_t& timeout) {
   shard = -1;
   threads = -1;
   path.clear();
@@ -28,7 +29,7 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
       shard = atoi(argv[++i]);
       continue;
     }
-    if (!strcmp("-t", argv[i]) && i+1 < argc) {
+    if (!strcmp("-n", argv[i]) && i+1 < argc) {
       threads = atoi(argv[++i]);
       continue;
     }
@@ -38,6 +39,10 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
     }
     if (!strcmp("-a", argv[i]) && i+1 < argc) {
       ip = argv[++i];
+      continue;
+    }
+    if (!strcmp("-t", argv[i]) && i+1 < argc) {
+      timeout = std::stoull(argv[++i]);
       continue;
     }
     if (!strcmp("-h", argv[i])) {
@@ -60,10 +65,11 @@ int main(int argc, char* argv[]) {
   int threads;
   std::string dsp_path;
   std::string server_ip;
-  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip);
+  uint64_t timeout;
+  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip, timeout);
 
-  RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
-  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads);
+  RpcChannel rpc(RpcChannel::Pier::Client, server_ip, timeout);
+  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout);
   if (rc) {
     log_message(FormatString("ReplicateCheckpoint failed\n"));
     exit(1);

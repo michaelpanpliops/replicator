@@ -11,9 +11,9 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer()
+CheckpointConsumer::CheckpointConsumer(uint64_t timeout)
 {
-  replication_consumer_ = std::make_unique<Replicator::Consumer>();
+  replication_consumer_ = std::make_unique<Replicator::Consumer>(timeout);
 }
 
 void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string& error)
@@ -89,7 +89,7 @@ int GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint6
 // Main entry function 
 // Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
 int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
-                        int32_t desired_num_of_threads)
+                        int32_t desired_num_of_threads, uint64_t timeout)
 {
   // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
@@ -116,7 +116,7 @@ int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_p
   }
 
   // Create consumer object
-  consumer_ = std::make_unique<CheckpointConsumer>();  
+  consumer_ = std::make_unique<CheckpointConsumer>(timeout);
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
@@ -173,8 +173,8 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
               "Received by the client: num_kv_pairs = %lld, num_bytes = %lld, state = %s\n",
               client_num_kv_pairs, client_num_bytes, ToString(consumer_state)));
 
-#define CHECK_PRODUCER_STATE 
-#ifdef CHECK_PRODUCER_STATE
+#define CHECK_CONSUMER_STATE 
+#ifdef CHECK_CONSUMER_STATE
   // Cleanup and return if the consumer it is done
   if (IsFinalState(consumer_state)) {
     rc = consumer_->ConsumerImpl().Stop();

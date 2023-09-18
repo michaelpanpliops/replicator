@@ -9,8 +9,8 @@
 
 namespace Replicator {
 
-Consumer::Consumer()
-  : kill_(false)
+Consumer::Consumer(uint64_t timeout)
+  : kill_(false), timeout_(timeout)
 {}
 
 Consumer::~Consumer() {
@@ -26,7 +26,11 @@ void Consumer::WriterThread() {
   while(!kill_) {
     // Pop the next KV pair.
     std::pair<std::string,std::string> message;
-    message_queue_->wait_dequeue(message);
+    if (message_queue_->wait_dequeue_timed(message, timeout_ * 1000000/*timeout[usec]*/)) {
+      log_message(FormatString("Failed to dequeue message of key %s, reason: timeout\n", message.first));
+      SetState(ConsumerState::ERROR, "");
+      return;
+    }
     std::string& key = message.first;
     std::string& value = message.second;
     if (key.empty()) {

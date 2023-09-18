@@ -51,6 +51,24 @@ class Connection<ConnectionType::TCP_SOCKET> {
 static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c)
 {
+    // Use select to monitor the server socket for incoming connections with a timeout
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    FD_SET(listen_c.socket_fd_, &read_fds);
+
+  struct timeval timeout;
+  timeout.tv_sec = 5;  // Set the timeout to 5 seconds
+  timeout.tv_usec = 0;
+
+  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &timeout);
+  if (select_result == -1) {
+      log_message(FormatString("select error: %s\n", strerror(errno)));
+      return 1;
+  } else if (select_result == 0) {
+      log_message(FormatString("Accept timeout reached.\n"));
+      return 1;
+  }
+
   int connfd = 0;
   connfd = accept(listen_c.socket_fd_, (struct sockaddr*)NULL, NULL);
   if (connfd == -1) {
@@ -59,6 +77,14 @@ static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   }
   log_message(FormatString("Shard connected.\n"));
   accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
+  if (setsockopt(accept_c->socket_fd_, IPPROTO_TCP, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      return -1;
+  }
+  if (setsockopt(accept_c->socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+      return -1;
+  }
   return 0;
 }
 
@@ -76,7 +102,7 @@ int bind(uint16_t& port,
 
 template<ConnectionType Protocol>
 int connect(const std::string& destination_ip, uint32_t destination_port,
-  std::unique_ptr<Connection<Protocol>>& connection)
+  std::unique_ptr<Connection<Protocol>>& connection, uint64_t timeout)
 {
   static_assert("Usupported connection type");
   return -1;
@@ -84,6 +110,6 @@ int connect(const std::string& destination_ip, uint32_t destination_port,
 
 template<>
 int connect(const std::string& destination_ip, uint32_t destination_port,
-  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection);
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection, uint64_t timeout);
 
 }

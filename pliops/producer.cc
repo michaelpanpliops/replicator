@@ -131,7 +131,11 @@ void Producer::CommunicationThread() {
   std::string key, value;
   while(!kill_) {
     std::pair<std::string, std::string> message;
-    message_queue_->wait_dequeue(message);
+    if (!message_queue_->wait_dequeue_timed(message, timeout_ * 1000000/*timeout[usec]*/)) {
+      log_message(FormatString("Failed to dequeue message of key %s, reason: timeout\n", message.first));
+      SetState(ProducerState::ERROR, "");
+      return;
+    }
     auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size());
     if (rc) {
       log_message(FormatString("connection_->Send failed\n"));
@@ -193,9 +197,10 @@ int Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<
 
 int Producer::Start(const std::string& ip, uint16_t port,
                     uint32_t max_num_of_threads, uint32_t parallelism,
-                    std::function<void(ProducerState, const std::string&)>& done_callback)
+                    std::function<void(ProducerState, const std::string&)>& done_callback, uint64_t timeout)
 {
   done_callback_ = done_callback;
+  timeout_ = timeout;
 
   // Move state into IN_PROGRESS
   assert(state_ == ProducerState::IDLE);
@@ -212,7 +217,7 @@ int Producer::Start(const std::string& ip, uint16_t port,
   // Connect to consumer
   log_message("Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = connect<ConnectionType::TCP_SOCKET>(ip, port, connection_);
+  rc = connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_);
   if (rc) {
     log_message("Socket connect failed\n");
     return -1;

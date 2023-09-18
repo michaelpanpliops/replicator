@@ -160,7 +160,7 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
     return -1;
   }
 
-  if ( -1 == listen(listenfd, 1)) { //number_of_connections) ) {
+  if ( -1 == listen(listenfd, 1)) {
     log_message(FormatString("Socket listening failed: %d\n", errno));
     return -1;
   }
@@ -181,7 +181,8 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
 
 template<>
 int connect(const std::string& destination_ip, const uint32_t destination_port,
-            std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection)
+            std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection,
+            uint64_t timeout)
 {
   int sockfd = 0;
   struct sockaddr_in serv_addr; 
@@ -189,6 +190,33 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
   if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     log_message(FormatString("Socket creation failed: %d\n", errno));
     return -1;
+  }
+
+  // Set the timeout
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout;
+  tv_timeout.tv_usec = 0;
+
+  // SO_RCVTIMEO
+  // Defines the receive timeout value, which is how long the system will wait for a read,
+  // recv, recvfrom, tpf_read_TCP_message, activate_on_receipt, activate_on_receipt_with_length,
+  // activate_on_receipt_of_TCP_message, accept, activate_on_accept, or connect function to be
+  // completed before timing out the operation. A returned value of 0 indicates the system will
+  // not time out. The maximum value is 32767 seconds.
+  if (setsockopt(sockfd, IPPROTO_TCP, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      close(sockfd);
+      return -1;
+  }
+
+  // SO_SNDTIMEO
+  // Defines the send timeout value, which is how long the system will wait for a send, sendto,
+  // write, or writev function to be completed before timing out the operation. A returned value
+  // of 0 indicates the system will not time out. The maximum value is 32767 seconds.
+  if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+      close(sockfd);
+      return -1;
   }
 
   memset(&serv_addr, '0', sizeof(serv_addr)); 
@@ -201,8 +229,13 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
     return -1;
   }
 
-  if( connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    log_message(FormatString("Failed connecting socket: %d\n", errno));
+  if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    if (errno == EINPROGRESS) {
+        log_message(FormatString("Failed on timeout when connecting to socket: %d\n", errno));
+    } else {
+      log_message(FormatString("Failed connecting socket: %d\n", errno));
+    }
+    close(sockfd);
     return -1;
   }
 
