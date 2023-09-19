@@ -49,24 +49,25 @@ class Connection<ConnectionType::TCP_SOCKET> {
 };
 
 static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
-  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c)
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
+  uint64_t timeout)
 {
     // Use select to monitor the server socket for incoming connections with a timeout
     fd_set read_fds;
     FD_ZERO(&read_fds);
     FD_SET(listen_c.socket_fd_, &read_fds);
 
-  struct timeval timeout;
-  timeout.tv_sec = 5;  // Set the timeout to 5 seconds
-  timeout.tv_usec = 0;
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout;
+  tv_timeout.tv_usec = 0;
 
-  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &timeout);
+  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &tv_timeout);
   if (select_result == -1) {
       log_message(FormatString("select error: %s\n", strerror(errno)));
-      return 1;
+      return -1;
   } else if (select_result == 0) {
       log_message(FormatString("Accept timeout reached.\n"));
-      return 1;
+      return -1;
   }
 
   int connfd = 0;
@@ -75,16 +76,18 @@ static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
     log_message(FormatString("Socket accepting failed: %d\n", errno));
     return -1;
   }
+  if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      close(connfd);
+      return -1;
+  }
+  if (setsockopt(connfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+      close(connfd);
+      return -1;
+  }
   log_message(FormatString("Shard connected.\n"));
   accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
-  if (setsockopt(accept_c->socket_fd_, IPPROTO_TCP, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
-      return -1;
-  }
-  if (setsockopt(accept_c->socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
-      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
-      return -1;
-  }
   return 0;
 }
 

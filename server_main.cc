@@ -14,7 +14,7 @@ static void PrintHelp() {
   std::cout << "  -p the path to the db directory" << std::endl;
   std::cout << "  -a the ip address of the client" << std::endl;
   std::cout << "  -i internal iterator parallelism" << std::endl;
-  std::cout << "  -t timeout [seconds]" << std::endl;
+  std::cout << "  -t timeout [msec] (default: 5000)" << std::endl;
 }
 
 static void ParseArgs(int argc, char *argv[], int& parallelism, std::string& path, std::string& ip, uint64_t& timeout) {
@@ -58,10 +58,10 @@ int main(int argc, char* argv[]) {
   int parallelism;
   std::string src_path;
   std::string client_ip;
-  uint64_t timeout;
+  uint64_t timeout = 5000;
   ParseArgs(argc, argv, parallelism, src_path, client_ip, timeout);
 
-  RpcChannel rpc(RpcChannel::Pier::Server, client_ip, timeout);
+  RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
   auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, timeout);
   if (rc) {
     log_message(FormatString("ProvideCheckpoint failed\n"));

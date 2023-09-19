@@ -28,6 +28,8 @@ namespace {
   }
 
   bool IsFinalState(const State& s) { return (s >= State::DONE); }
+  uint64_t msec_to_sec(uint64_t msec) { return msec / 1000; }
+  uint64_t msec_to_usec(uint64_t msec) { return msec * 1000; }
 }
 
 }

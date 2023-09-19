@@ -55,7 +55,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   range = thread_key_ranges_[thread_id];
   Status status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
   if (!status.ok()) {
-    log_message(FormatString("cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
+    log_message(FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
     SetState(ProducerState::ERROR, "");
     return;
   }
@@ -66,7 +66,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor;
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
-    log_message("db->NewIterator returned nullptr\n");
+    log_message("Reader thread: db->NewIterator returned nullptr\n");
     SetState(ProducerState::ERROR, "");
     return;
   }
@@ -96,11 +96,23 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
 
     iterator->Next();
 
+    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
     bool enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});
     while (!enqueued && !kill_) {
+      auto current_time = std::chrono::steady_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+      
+      if (elapsed_time.count() >= timeout_) {
+          log_message(FormatString("Reader thread: enqueue failed, reason: timeout\n"));
+          SetState(ProducerState::ERROR, "");
+          break;
+      }
+
       // Server side is not fast enough, message queue is full. re-attempt enqueueing to shard's message queue in a short bit.
       std::this_thread::sleep_for(std::chrono::microseconds(100));
-      enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});
+
+      std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+      enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});      
     }
 
     total_number_of_operations++;
@@ -113,7 +125,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   status = iterator->Close();
   delete iterator;
   if (!status.ok()) {
-    log_message(FormatString("iterator->Close failed, reason: %s\n", status.ToString()));
+    log_message(FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
     SetState(ProducerState::ERROR, "");
   }
 
@@ -131,14 +143,14 @@ void Producer::CommunicationThread() {
   std::string key, value;
   while(!kill_) {
     std::pair<std::string, std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, timeout_ * 1000000/*timeout[usec]*/)) {
-      log_message(FormatString("Failed to dequeue message of key %s, reason: timeout\n", message.first));
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_))) {
+      log_message(FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
       SetState(ProducerState::ERROR, "");
       return;
     }
     auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size());
     if (rc) {
-      log_message(FormatString("connection_->Send failed\n"));
+      log_message(FormatString("Communication thread: connection_->Send failed\n"));
       SetState(ProducerState::ERROR, "");
       return;
     }
@@ -149,7 +161,7 @@ void Producer::CommunicationThread() {
       delete shard_;
       shard_ = nullptr;
       if (!status.ok()) {
-        log_message(FormatString("shard_->Close failed, reason: %s\n", status.ToString()));
+        log_message(FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
         SetState(ProducerState::ERROR, "");
         return;
       }
@@ -217,7 +229,7 @@ int Producer::Start(const std::string& ip, uint16_t port,
   // Connect to consumer
   log_message("Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_);
+  rc = connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, msec_to_sec(timeout_));
   if (rc) {
     log_message("Socket connect failed\n");
     return -1;

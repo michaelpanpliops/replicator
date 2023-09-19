@@ -71,7 +71,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 
   unsigned int total_bytes_sent = 0;
   while (total_bytes_sent < sizeof(uint32_t)) {
-    int bytes_sent = write(socket_fd_, reinterpret_cast<char*>(&message_size) + total_bytes_sent, sizeof(uint32_t) - total_bytes_sent);
+    int bytes_sent = send(socket_fd_,
+                          reinterpret_cast<char*>(&message_size) + total_bytes_sent,
+                          sizeof(uint32_t) - total_bytes_sent,
+                          MSG_NOSIGNAL);
     if (bytes_sent == 0 && errno == 0) {
       // Connection closed by other party (EOF).
       return 1;
@@ -85,7 +88,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
   // Send the message
   total_bytes_sent = 0;
   while (total_bytes_sent < message.buffer_.size()) {
-    int bytes_sent = write(socket_fd_, message.buffer_.data() + total_bytes_sent, message.buffer_.size() - total_bytes_sent);
+  int bytes_sent = send(socket_fd_,
+                        message.buffer_.data() + total_bytes_sent,
+                        message.buffer_.size() - total_bytes_sent,
+                        MSG_NOSIGNAL);
     if (bytes_sent <= 0) {
       log_message(FormatString("Failed to send message body: %d\n", errno));
       return -1;
@@ -104,7 +110,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   char size_buffer[sizeof(uint32_t)];
   unsigned int total_bytes_read = 0;
   while (total_bytes_read < sizeof(uint32_t)) {
-    int bytes_read = read(socket_fd_, size_buffer + total_bytes_read, sizeof(uint32_t) - total_bytes_read);
+    int bytes_read = recv(socket_fd_,
+                          size_buffer + total_bytes_read,
+                          sizeof(uint32_t) - total_bytes_read,
+                          0);
     if (bytes_read == 0 && errno == 0) {
       // Connection closed by other party (EOF).
       return 1;
@@ -116,16 +125,19 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   }
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
-  if (message_size > MAX_MESSAGE_LENGTH) {
+    if (message_size > MAX_MESSAGE_LENGTH) {
     log_message(FormatString("Message is too big: %d\n", message_size));
     return -1;
   }
   // Allocate a buffer for the incoming message
-  char buffer[message_size];
+char buffer[message_size];
   // Read the message from the socket
   total_bytes_read = 0;
   while (total_bytes_read < message_size) {
-    int bytes_read = read(socket_fd_, buffer + total_bytes_read, message_size - total_bytes_read);
+    int bytes_read = recv(socket_fd_,
+                          buffer + total_bytes_read,
+                          message_size - total_bytes_read,
+                          0);
     if (bytes_read <= 0) {
       log_message(FormatString("Failed to read message body: %d\n", errno));
       return -1;
@@ -203,7 +215,7 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
   // activate_on_receipt_of_TCP_message, accept, activate_on_accept, or connect function to be
   // completed before timing out the operation. A returned value of 0 indicates the system will
   // not time out. The maximum value is 32767 seconds.
-  if (setsockopt(sockfd, IPPROTO_TCP, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+  if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
       log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
       close(sockfd);
       return -1;

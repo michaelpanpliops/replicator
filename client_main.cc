@@ -15,7 +15,7 @@ static void PrintHelp() {
   std::cout << "  -p the path to the replication directory" << std::endl;
   std::cout << "  -a the ip address of the server" << std::endl;
   std::cout << "  -n desired number of threads" << std::endl;
-  std::cout << "  -t timeout [seconds]" << std::endl;
+  std::cout << "  -t timeout [msec] (default: 5000)" << std::endl;
 }
 
 static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip, uint64_t& timeout) {
@@ -65,10 +65,10 @@ int main(int argc, char* argv[]) {
   int threads;
   std::string dsp_path;
   std::string server_ip;
-  uint64_t timeout;
+  uint64_t timeout = 5000;
   ParseArgs(argc, argv, shard, threads, dsp_path, server_ip, timeout);
 
-  RpcChannel rpc(RpcChannel::Pier::Client, server_ip, timeout);
+  RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
   auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout);
   if (rc) {
     log_message(FormatString("ReplicateCheckpoint failed\n"));
