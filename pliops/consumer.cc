@@ -9,8 +9,8 @@
 
 namespace Replicator {
 
-Consumer::Consumer(uint64_t timeout)
-  : kill_(false), timeout_(timeout)
+Consumer::Consumer(uint64_t timeout_msec)
+  : kill_(false), timeout_msec_(timeout_msec)
 {}
 
 Consumer::~Consumer() {
@@ -26,7 +26,7 @@ void Consumer::WriterThread() {
   while(!kill_) {
     // Pop the next KV pair.
     std::pair<std::string,std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_))) {
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
       log_message(FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
       SetState(ConsumerState::ERROR, "");
       return;
@@ -79,7 +79,7 @@ void Consumer::CommunicationThread()
 {
   log_message(FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
-  auto rc = accept(*connection_, connection, msec_to_sec(timeout_));
+  auto rc = accept(*connection_, connection, timeout_msec_);
   if (rc) {
     log_message(FormatString("Communication thread: accept failed\n"));
     SetState(ConsumerState::ERROR, "");
@@ -94,8 +94,8 @@ void Consumer::CommunicationThread()
       SetState(ConsumerState::ERROR, "");
       return;
     }
-    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_))) {
-      log_message(FormatString("Communication thread: Failed to enequeue, reason: timeout\n"));
+    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_msec_))) {
+      log_message(FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
       SetState(ConsumerState::ERROR, "");
       return;
     }

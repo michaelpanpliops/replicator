@@ -18,7 +18,7 @@ static void PrintHelp() {
   std::cout << "  -t timeout [msec] (default: 5000)" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip, uint64_t& timeout) {
+static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip, uint64_t& timeout_msec) {
   shard = -1;
   threads = -1;
   path.clear();
@@ -42,7 +42,7 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
       continue;
     }
     if (!strcmp("-t", argv[i]) && i+1 < argc) {
-      timeout = std::stoull(argv[++i]);
+      timeout_msec = std::stoull(argv[++i]);
       continue;
     }
     if (!strcmp("-h", argv[i])) {
@@ -65,11 +65,11 @@ int main(int argc, char* argv[]) {
   int threads;
   std::string dsp_path;
   std::string server_ip;
-  uint64_t timeout = 5000;
-  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip, timeout);
+  uint64_t timeout_msec = 5000; // default timeout
+  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip, timeout_msec);
 
   RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
-  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout);
+  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout_msec);
   if (rc) {
     log_message(FormatString("ReplicateCheckpoint failed\n"));
     exit(1);

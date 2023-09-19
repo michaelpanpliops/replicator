@@ -14,13 +14,13 @@ int ReplicateCheckpoint(RpcChannel& rpc,
                         int32_t shard,
                         const std::string &dst_path,
                         int32_t desired_num_of_threads,
-                        uint64_t timeout);
+                        uint64_t timeout_msec);
 int CheckReplicationStatus(RpcChannel& rpc, bool& done);
 
 class CheckpointConsumer
 {
 public:
-  CheckpointConsumer(uint64_t timeout);
+  CheckpointConsumer(uint64_t timeout_msec);
   ~CheckpointConsumer() {}
 
   // Accessors

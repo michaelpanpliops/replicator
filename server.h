@@ -14,7 +14,7 @@ int ProvideCheckpoint(RpcChannel& rpc,
                       const std::string &src_path,
                       const std::string& client_ip,
                       int parallelism,
-                      uint64_t timeout);
+                      uint64_t timeout_msec);
 
 class CheckpointProducer
 {
@@ -24,7 +24,7 @@ public:
 
   // Client requests processing methods
   int CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout);
+  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout_msec);
   int GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup

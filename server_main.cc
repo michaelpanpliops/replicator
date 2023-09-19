@@ -17,7 +17,7 @@ static void PrintHelp() {
   std::cout << "  -t timeout [msec] (default: 5000)" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], int& parallelism, std::string& path, std::string& ip, uint64_t& timeout) {
+static void ParseArgs(int argc, char *argv[], int& parallelism, std::string& path, std::string& ip, uint64_t& timeout_msec) {
   parallelism = -1;
   path.clear();
   ip.clear();
@@ -36,7 +36,7 @@ static void ParseArgs(int argc, char *argv[], int& parallelism, std::string& pat
       continue;
     }
     if (!strcmp("-t", argv[i]) && i+1 < argc) {
-      timeout = std::stoull(argv[++i]);
+      timeout_msec = std::stoull(argv[++i]);
       continue;
     }
     if (!strcmp("-h", argv[i])) {
@@ -58,11 +58,11 @@ int main(int argc, char* argv[]) {
   int parallelism;
   std::string src_path;
   std::string client_ip;
-  uint64_t timeout = 5000;
-  ParseArgs(argc, argv, parallelism, src_path, client_ip, timeout);
+  uint64_t timeout_msec = 5000; // default timeout
+  ParseArgs(argc, argv, parallelism, src_path, client_ip, timeout_msec);
 
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
-  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, timeout);
+  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, timeout_msec);
   if (rc) {
     log_message(FormatString("ProvideCheckpoint failed\n"));
     exit(1);

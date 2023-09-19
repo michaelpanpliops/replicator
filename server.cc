@@ -88,7 +88,7 @@ int CheckpointProducer::CreateCheckpoint(
 int CheckpointProducer::StartStreaming(
                           const StartStreamingRequest& req,
                           StartStreamingResponse& res,
-                          uint64_t timeout)
+                          uint64_t timeout_msec)
 {
   log_message(FormatString("StartStreaming: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
                 client_ip_.c_str(), req.checkpoint_id, req.consumer_port, req.max_num_of_threads));
@@ -105,7 +105,8 @@ int CheckpointProducer::StartStreaming(
     std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
-  auto rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads, parallelism_, done_cb, timeout);
+  auto rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
+                              parallelism_, timeout_msec, done_cb);
   if (rc) {
     log_message(FormatString("Producer::Start failed\n"));
     return -1;
@@ -192,7 +193,7 @@ void CheckpointProducer::ReplicationDone(ProducerState state, const std::string&
 }
 
 int ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip,
-                        int parallelism, uint64_t timeout)
+                        int parallelism, uint64_t timeout_msec)
 {
   using namespace std::placeholders;
 
@@ -207,7 +208,7 @@ int ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::s
   }
 
   std::function<int(const StartStreamingRequest&, StartStreamingResponse&)>
-    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2, timeout); 
+    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2, timeout_msec); 
   rc = rpc.ProcessCommand(start_streaming_cb);
   if (rc) {
     log_message(FormatString("CheckpointProducer::StartStreaming failed\n"));
