@@ -113,7 +113,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
       }
 
       // Server side is not fast enough, message queue is full. re-attempt enqueueing to shard's message queue in a short bit.
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
       std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
       enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});      
@@ -233,7 +233,7 @@ int Producer::Start(const std::string& ip, uint16_t port,
   // Connect to consumer
   log_message("Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
+  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
   if (rc) {
     log_message("Socket connect failed\n");
     return -1;

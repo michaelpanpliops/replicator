@@ -79,7 +79,7 @@ void Consumer::CommunicationThread()
 {
   log_message(FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
-  auto rc = accept(*connection_, connection, timeout_msec_);
+  auto rc = Accept(*connection_, connection, timeout_msec_);
   if (rc) {
     log_message(FormatString("Communication thread: accept failed\n"));
     SetState(ConsumerState::ERROR, "");
@@ -146,7 +146,7 @@ int Consumer::Start(const std::string& replica_path, uint16_t& port,
   }
 
   // Listen for incoming connection
-  rc = bind(port, connection_);
+  rc = Bind(port, connection_);
   if (rc) {
     log_message(FormatString("Socket binding failed\n"));
     return -1;

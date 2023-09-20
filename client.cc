@@ -208,7 +208,7 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // Cleanup and return if the server it is done
   if (IsFinalState(server_state) && !done) {
     // Wait for consumer to complete
-    auto wait_rc = consumer_->WaitForCompletion(5000);
+    auto wait_rc = consumer_->WaitForCompletion(50000);
     if (wait_rc) {
       log_message(FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       // return -1; - do not stop here, try to cleanup
