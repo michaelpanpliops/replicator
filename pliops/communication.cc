@@ -95,7 +95,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
   return 0;
 }
 
-constexpr unsigned int MAX_MESSAGE_LENGTH = 1024 * 1024 * 300;
+constexpr unsigned int MAX_MESSAGE_LENGTH_ON_STACK = 100 * 1024;
 
 // Receive a KV pair from the connection
 int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::string& value)
@@ -116,12 +116,16 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   }
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
-  if (message_size > MAX_MESSAGE_LENGTH) {
-    log_message(FormatString("Message is too big: %d\n", message_size));
-    return -1;
-  }
   // Allocate a buffer for the incoming message
-  char buffer[message_size];
+  char* buffer;
+  char buffer_on_stack[message_size];
+  std::vector<char> buffer_on_heap;
+  if (message_size < MAX_MESSAGE_LENGTH_ON_STACK) {
+    buffer = buffer_on_stack;
+  } else {
+    buffer_on_heap.reserve(message_size);
+    buffer = buffer_on_heap.data();
+  }
   // Read the message from the socket
   total_bytes_read = 0;
   while (total_bytes_read < message_size) {
