@@ -5,49 +5,6 @@
 
 namespace Replicator {
 
-struct KvPairMessage {
-  void set_key_value(const char* key, uint32_t key_size, const char* value, uint32_t value_size)
-  {
-    uint32_t message_size = sizeof(key_size) + key_size + sizeof(value_size) + value_size;
-    buffer_.resize(message_size);
-    char* ptr = buffer_.data();
-    memcpy(ptr, &key_size, sizeof(key_size));
-    ptr += sizeof(key_size);
-    memcpy(ptr, key, key_size);
-    ptr += key_size;
-    memcpy(ptr, &value_size, sizeof(value_size));
-    ptr += sizeof(value_size);
-    memcpy(ptr, value, value_size);
-  }
-
-  std::pair<std::string, std::string> get_key_val(const char* buf, uint32_t buf_size)
-  {
-    std::string key, value;
-    uint32_t key_size, value_size;
-    if (buf_size < sizeof(key_size)) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)\n"));
-    }
-    memcpy(&key_size, buf, sizeof(key_size));
-    buf += sizeof(key_size);
-    if (buf_size < sizeof(key_size)+key_size) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size\n"));
-    }
-    key.assign(buf, key_size);
-    buf += key_size;
-    if (buf_size < sizeof(key_size)+key_size+sizeof(value_size)) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size+sizeof(value_size)\n"));
-    }
-    memcpy(&value_size, buf, sizeof(value_size));
-    buf += sizeof(value_size);
-    if (buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size) {
-      throw std::runtime_error(FormatString("Bad message: buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size\n"));
-    }
-    value.assign(buf, value_size);
-    return {key, value};
-  }
-
-  std::vector<char> buffer_;
-};
 
 Connection<ConnectionType::TCP_SOCKET>::Connection(int socket_fd)
   : socket_fd_(socket_fd), closed_(false)
@@ -60,14 +17,14 @@ Connection<ConnectionType::TCP_SOCKET>::~Connection()
   }
 }
 
-int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size)
+int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer)
 {
   // Create the message
-  KvPairMessage message;
-  message.set_key_value(key, key_size, value, value_size);
+  std::vector<char> message;
+  kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
 
   // Send the size of the message
-  uint32_t message_size = htonl(message.buffer_.size());
+  uint32_t message_size = htonl(message.size());
 
   unsigned int total_bytes_sent = 0;
   while (total_bytes_sent < sizeof(uint32_t)) {
@@ -84,8 +41,8 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 
   // Send the message
   total_bytes_sent = 0;
-  while (total_bytes_sent < message.buffer_.size()) {
-    int bytes_sent = write(socket_fd_, message.buffer_.data() + total_bytes_sent, message.buffer_.size() - total_bytes_sent);
+  while (total_bytes_sent < message.size()) {
+    int bytes_sent = write(socket_fd_, message.data() + total_bytes_sent, message.size() - total_bytes_sent);
     if (bytes_sent <= 0) {
       log_message(FormatString("Failed to send message body: %d\n", errno));
       return -1;
@@ -98,7 +55,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 constexpr unsigned int MAX_MESSAGE_LENGTH = 1024 * 1024 * 300;
 
 // Receive a KV pair from the connection
-int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::string& value)
+int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer)
 {
   // Read the size of the incoming message from the socket
   char size_buffer[sizeof(uint32_t)];
@@ -133,8 +90,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
     total_bytes_read += bytes_read;
   }
   // Parse the message
-  KvPairMessage message;
-  std::tie(key, value) = message.get_key_val(buffer, message_size);
+  std::tie(key, value) = kv_pair_serializer.Deserialize(buffer, message_size);
   return 0;
 }
 

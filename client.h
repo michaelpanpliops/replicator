@@ -13,13 +13,14 @@
 int ReplicateCheckpoint(RpcChannel& rpc,
                         int32_t shard,
                         const std::string &dst_path,
-                        int32_t desired_num_of_threads);
+                        int32_t desired_num_of_threads,
+                        IKvPairSerializer& kv_pair_serializer);
 int CheckReplicationStatus(RpcChannel& rpc, bool& done);
 
 class CheckpointConsumer
 {
 public:
-  CheckpointConsumer();
+  CheckpointConsumer(IKvPairSerializer& kv_pair_serializer);
   ~CheckpointConsumer() {}
 
   // Accessors

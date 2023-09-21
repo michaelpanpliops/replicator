@@ -11,9 +11,9 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer()
+CheckpointConsumer::CheckpointConsumer(IKvPairSerializer& kv_pair_serializer)
 {
-  replication_consumer_ = std::make_unique<Replicator::Consumer>();
+  replication_consumer_ = std::make_unique<Replicator::Consumer>(kv_pair_serializer);
 }
 
 void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string& error)
@@ -89,7 +89,7 @@ int GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint6
 // Main entry function 
 // Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
 int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
-                        int32_t desired_num_of_threads)
+                        int32_t desired_num_of_threads, IKvPairSerializer& kv_pair_serializer)
 {
   // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
@@ -116,7 +116,7 @@ int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_p
   }
 
   // Create consumer object
-  consumer_ = std::make_unique<CheckpointConsumer>();  
+  consumer_ = std::make_unique<CheckpointConsumer>(kv_pair_serializer);  
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;

@@ -26,7 +26,7 @@ struct Statistics {
 
 class Producer {
 public:
-  explicit Producer();
+  explicit Producer(IKvPairSerializer& kv_pair_serializer);
   virtual ~Producer();
   int OpenShard(const std::string& shard_path);
   int Start(const std::string& ip, uint16_t port,
@@ -49,6 +49,9 @@ private:
 
   // Statistics
   Statistics statistics_;
+
+  // Serialization
+  IKvPairSerializer& kv_pair_serializer_;
 
   // Stores KV pairs to send over the network. The readers push messages to the queue.
   std::unique_ptr<MessageQueue> message_queue_;

@@ -13,12 +13,13 @@
 int ProvideCheckpoint(RpcChannel& rpc,
                       const std::string &src_path,
                       const std::string& client_ip,
-                      int parallelism);
+                      int parallelism,
+                      IKvPairSerializer& kv_pair_serializer);
 
 class CheckpointProducer
 {
 public:
-  CheckpointProducer(const std::string &src_path, const std::string& client_ip, int parallelism);
+  CheckpointProducer(const std::string &src_path, const std::string& client_ip, int parallelism, IKvPairSerializer& kv_pair_serializer);
   ~CheckpointProducer() {}
 
   // Client requests processing methods

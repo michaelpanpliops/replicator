@@ -29,6 +29,7 @@ set(SOURCES
     server.cc
     pliops/communication.cc
     pliops/consumer.cc
+    pliops/kv_pair_simple_serializer.cc
     pliops/producer.cc
     )
 

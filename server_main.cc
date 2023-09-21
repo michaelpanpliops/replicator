@@ -1,6 +1,7 @@
 #include "server.h"
 #include "log.h"
 #include "rpc.h"
+#include "pliops/kv_pair_simple_serializer.h"
 
 #include <thread>
 #include <chrono>
@@ -56,7 +57,8 @@ int main(int argc, char* argv[]) {
   ParseArgs(argc, argv, parallelism, src_path, client_ip);
 
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
-  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism);
+  KvPairSimpleSerializer kv_pair_serializer;
+  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, kv_pair_serializer);
   if (rc) {
     log_message(FormatString("ProvideCheckpoint failed\n"));
     exit(1);

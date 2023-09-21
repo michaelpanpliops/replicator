@@ -9,8 +9,8 @@
 
 namespace Replicator {
 
-Consumer::Consumer()
-  : kill_(false)
+Consumer::Consumer(IKvPairSerializer& kv_pair_serializer)
+  : kill_(false), kv_pair_serializer_(kv_pair_serializer)
 {}
 
 Consumer::~Consumer() {
@@ -84,7 +84,7 @@ void Consumer::CommunicationThread()
 
   std::string key, value;
   while(!kill_) {
-    rc = connection->Receive(key, value);
+    rc = connection->Receive(key, value, kv_pair_serializer_);
     if (rc) {
       log_message("Communication thread: recv failed.\n");
       SetState(ConsumerState::ERROR, "");

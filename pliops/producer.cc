@@ -7,8 +7,8 @@
 
 namespace Replicator {
 
-Producer::Producer()
-  : kill_(false)
+Producer::Producer(IKvPairSerializer& kv_pair_serializer)
+  : kill_(false), kv_pair_serializer_(kv_pair_serializer)
 {}
 
 Producer::~Producer()
@@ -132,7 +132,7 @@ void Producer::CommunicationThread() {
   while(!kill_) {
     std::pair<std::string, std::string> message;
     message_queue_->wait_dequeue(message);
-    auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size());
+    auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size(), kv_pair_serializer_);
     if (rc) {
       log_message(FormatString("connection_->Send failed\n"));
       SetState(ProducerState::ERROR, "");

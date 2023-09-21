@@ -14,10 +14,10 @@ uint32_t GetUniqueCheckpointName() { return 12345; }
 }
 
 CheckpointProducer::CheckpointProducer(
-  const std::string &src_path, const std::string& client_ip, int parallelism)
+  const std::string &src_path, const std::string& client_ip, int parallelism, IKvPairSerializer& kv_pair_serializer)
   : src_path_(src_path), client_ip_(client_ip), parallelism_(parallelism)
 {
-  producer_ = std::make_unique<Replicator::Producer>();
+  producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
 }
 
 // Process create-checkpoint request
@@ -191,11 +191,11 @@ void CheckpointProducer::ReplicationDone(ProducerState state, const std::string&
 }
 
 int ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip,
-                        int parallelism)
+                        int parallelism, IKvPairSerializer& kv_pair_serializer)
 {
   using namespace std::placeholders;
 
-  CheckpointProducer cp(src_path, client_ip, parallelism);
+  CheckpointProducer cp(src_path, client_ip, parallelism, kv_pair_serializer);
 
   std::function<int(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
     create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
