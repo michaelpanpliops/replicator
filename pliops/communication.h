@@ -48,42 +48,42 @@ class Connection<ConnectionType::TCP_SOCKET> {
     bool closed_;
 };
 
-static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
-  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c)
-{
-  int connfd = 0;
-  connfd = accept(listen_c.socket_fd_, (struct sockaddr*)NULL, NULL);
-  if (connfd == -1) {
-    log_message(FormatString("Socket accepting failed: %d\n", errno));
-    return -1;
-  }
-  log_message(FormatString("Shard connected.\n"));
-  accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
-  return 0;
-}
-
 template<ConnectionType Protocol>
-int bind(uint16_t& port,
-  std::unique_ptr<Connection<Protocol>>& connection)
+int Accept(Connection<Protocol>& listen_c,
+  std::unique_ptr<Connection<Protocol>>& accept_c,
+  uint64_t timeout_msec)
 {
-  static_assert("Usupported connection type");
+  static_assert("Unsupported accept type");
   return -1;
 }
 
 template<>
-int bind(uint16_t& port,
-  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection);
+int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
+  uint64_t timeout_msec);
 
 template<ConnectionType Protocol>
-int connect(const std::string& destination_ip, uint32_t destination_port,
+int Bind(uint16_t& port,
   std::unique_ptr<Connection<Protocol>>& connection)
 {
-  static_assert("Usupported connection type");
+  static_assert("Unsupported connection type");
   return -1;
 }
 
 template<>
-int connect(const std::string& destination_ip, uint32_t destination_port,
+int Bind(uint16_t& port,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection);
+
+template<ConnectionType Protocol>
+int Connect(const std::string& destination_ip, uint32_t destination_port,
+  std::unique_ptr<Connection<Protocol>>& connection, uint64_t timeout_msec)
+{
+  static_assert("Unsupported connection type");
+  return -1;
+}
+
+template<>
+int Connect(const std::string& destination_ip, uint32_t destination_port,
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection, uint64_t timeout_msec);
 
 }

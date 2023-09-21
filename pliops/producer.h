@@ -30,7 +30,7 @@ public:
   virtual ~Producer();
   int OpenShard(const std::string& shard_path);
   int Start(const std::string& ip, uint16_t port,
-            uint32_t max_num_of_threads, uint32_t parallelism,
+            uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
             std::function<void(ProducerState, const std::string&)>& done_callback);
   int Stop();
   int GetState(ProducerState& state, std::string& error);
@@ -62,6 +62,7 @@ private:
 
   // Signal threads to exit
   std::atomic<bool> kill_;
+  uint64_t timeout_msec_;
 
   // Worker threads
   void ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id);

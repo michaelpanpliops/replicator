@@ -9,8 +9,8 @@
 
 namespace Replicator {
 
-Consumer::Consumer()
-  : kill_(false)
+Consumer::Consumer(uint64_t timeout_msec)
+  : kill_(false), timeout_msec_(timeout_msec)
 {}
 
 Consumer::~Consumer() {
@@ -26,7 +26,11 @@ void Consumer::WriterThread() {
   while(!kill_) {
     // Pop the next KV pair.
     std::pair<std::string,std::string> message;
-    message_queue_->wait_dequeue(message);
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
+      log_message(FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
+      SetState(ConsumerState::ERROR, "");
+      return;
+    }
     std::string& key = message.first;
     std::string& value = message.second;
     if (key.empty()) {
@@ -39,7 +43,7 @@ void Consumer::WriterThread() {
     wo.disableWAL = true;
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
-      log_message(FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
+      log_message(FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
       SetState(ConsumerState::ERROR, "");
       return;
     }
@@ -53,7 +57,7 @@ void Consumer::WriterThread() {
   delete shard_;
   shard_ = nullptr;
   if (!status.ok()) {
-    log_message(FormatString("shard_->Close failed, reason: %s\n", status.ToString()));
+    log_message(FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString()));
     SetState(ConsumerState::ERROR, "");
     return;
   }
@@ -75,7 +79,7 @@ void Consumer::CommunicationThread()
 {
   log_message(FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
-  auto rc = accept(*connection_, connection);
+  auto rc = Accept(*connection_, connection, timeout_msec_);
   if (rc) {
     log_message(FormatString("Communication thread: accept failed\n"));
     SetState(ConsumerState::ERROR, "");
@@ -90,7 +94,11 @@ void Consumer::CommunicationThread()
       SetState(ConsumerState::ERROR, "");
       return;
     }
-    message_queue_->wait_enqueue({key, value});
+    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_msec_))) {
+      log_message(FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
+      SetState(ConsumerState::ERROR, "");
+      return;
+    }
     if (key.empty()) {
       // Finish thread
       return;
@@ -138,7 +146,7 @@ int Consumer::Start(const std::string& replica_path, uint16_t& port,
   }
 
   // Listen for incoming connection
-  rc = bind(port, connection_);
+  rc = Bind(port, connection_);
   if (rc) {
     log_message(FormatString("Socket binding failed\n"));
     return -1;
@@ -173,7 +181,7 @@ void Consumer::StopImpl()
 
   // We need to signal writer thread with poison pill
   // because it could be waiting on queue
-  message_queue_->wait_enqueue({"", ""});
+  message_queue_->wait_enqueue_timed({"", ""}, 1000);
   writer_thread_->join();
   connection_.reset();
   message_queue_.reset();

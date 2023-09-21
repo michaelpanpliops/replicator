@@ -24,7 +24,7 @@ struct Statistics {
 
 class Consumer {
 public:
-  explicit Consumer();
+  explicit Consumer(uint64_t timeout_msec);
   virtual ~Consumer();
   int Start(const std::string& replica_path, uint16_t& port,
             std::function<void(ConsumerState, const std::string&)>& done_callback);
@@ -69,6 +69,9 @@ private:
   std::string error_;
   std::mutex state_mutex_;
   void SetState(const ConsumerState& state, const std::string& error);
+
+  // Operating timeout
+  uint64_t timeout_msec_;
 };
 
 }
