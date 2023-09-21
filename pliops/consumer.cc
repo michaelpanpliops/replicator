@@ -5,7 +5,8 @@
 #include "rocksdb/db.h"
 
 #include "consumer.h"
-#include "log.h"
+#include "utils/string_util.h"
+#include "pliops/logger.h"
 
 namespace Replicator {
 
@@ -21,7 +22,7 @@ Consumer::~Consumer() {
 }
 
 void Consumer::WriterThread() {
-  log_message(FormatString("Writer thread started\n"));
+  logger->Log(LogLevel::INFO, FormatString("Writer thread started\n"));
 
   while(!kill_) {
     // Pop the next KV pair.
@@ -39,7 +40,7 @@ void Consumer::WriterThread() {
     wo.disableWAL = true;
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
-      log_message(FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
+      logger->Log(LogLevel::ERROR, FormatString("Failed inserting key %s, reason: %s\n", key, status.ToString()));
       SetState(ConsumerState::ERROR, "");
       return;
     }
@@ -53,31 +54,31 @@ void Consumer::WriterThread() {
   delete shard_;
   shard_ = nullptr;
   if (!status.ok()) {
-    log_message(FormatString("shard_->Close failed, reason: %s\n", status.ToString()));
+    logger->Log(LogLevel::ERROR, FormatString("shard_->Close failed, reason: %s\n", status.ToString()));
     SetState(ConsumerState::ERROR, "");
     return;
   }
 
   // Print out replication performance metrics
-  log_message(FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n",
+  logger->Log(LogLevel::INFO, FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n",
               statistics_.num_kv_pairs.load(), statistics_.num_bytes.load()));
   auto current_time = std::chrono::system_clock::now();
   auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time_);
-  log_message(FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
-  log_message(FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
+  logger->Log(LogLevel::INFO, FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
+  logger->Log(LogLevel::INFO, FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
 
   SetState(ConsumerState::DONE, "");
 
-  log_message(FormatString("Writer thread ended\n"));
+  logger->Log(LogLevel::INFO, FormatString("Writer thread ended\n"));
 }
 
 void Consumer::CommunicationThread()
 {
-  log_message(FormatString("Communication thread started.\n"));
+  logger->Log(LogLevel::INFO, FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
   auto rc = accept(*connection_, connection);
   if (rc) {
-    log_message(FormatString("Communication thread: accept failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Communication thread: accept failed\n"));
     SetState(ConsumerState::ERROR, "");
     return;
   }
@@ -86,7 +87,7 @@ void Consumer::CommunicationThread()
   while(!kill_) {
     rc = connection->Receive(key, value, kv_pair_serializer_);
     if (rc) {
-      log_message("Communication thread: recv failed.\n");
+      logger->Log(LogLevel::ERROR, "Communication thread: recv failed.\n");
       SetState(ConsumerState::ERROR, "");
       return;
     }
@@ -96,7 +97,7 @@ void Consumer::CommunicationThread()
       return;
     }
   }
-  log_message(FormatString("Communication thread ended.\n"));
+  logger->Log(LogLevel::INFO, FormatString("Communication thread ended.\n"));
 }
 
 int Consumer::OpenReplica(const std::string& replica_path)
@@ -118,7 +119,7 @@ int Consumer::OpenReplica(const std::string& replica_path)
                                             shard_path,
                                             &shard_);
   if (!status.ok()) {
-    log_message(FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
+    logger->Log(LogLevel::ERROR, FormatString("Failed to open db for shard #%d, reason: %s\n", shard_id, status.ToString()));
     return -1;
   }
 
@@ -133,14 +134,14 @@ int Consumer::Start(const std::string& replica_path, uint16_t& port,
   // Open replica
   auto rc = OpenReplica(replica_path);
   if (rc || !shard_) {
-    log_message(FormatString("OpenReplica failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("OpenReplica failed\n"));
     return -1;
   }
 
   // Listen for incoming connection
   rc = bind(port, connection_);
   if (rc) {
-    log_message(FormatString("Socket binding failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Socket binding failed\n"));
     return -1;
   }
 
@@ -148,13 +149,13 @@ int Consumer::Start(const std::string& replica_path, uint16_t& port,
   start_time_ = std::chrono::system_clock::now();
 
   // Start writer thread
-  log_message("Starting writer thread\n");
+  logger->Log(LogLevel::ERROR, "Starting writer thread\n");
   writer_thread_ = std::make_unique<std::thread>([this]() {
     this->WriterThread();
   });
 
   // Start the communication thread
-  log_message("Starting communication thread\n");
+  logger->Log(LogLevel::ERROR, "Starting communication thread\n");
   communication_thread_ =  std::make_unique<std::thread>([this]() {
     this->CommunicationThread();
   });
@@ -196,14 +197,14 @@ int Consumer::Stop()
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Consumer::StopImpl, this);
   if (future->wait_for(10s) == std::future_status::timeout) {
-    log_message("Stop failed, some threads are stuck.\n");
+    logger->Log(LogLevel::ERROR, "Stop failed, some threads are stuck.\n");
     // If the app will try destroy the Producer object, it will crash
     return -1;
   } else {
     delete future;
   }
 
-  log_message("Consumer finished its jobs\n");
+  logger->Log(LogLevel::ERROR, "Consumer finished its jobs\n");
   return 0;
 }
 

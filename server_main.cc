@@ -1,10 +1,13 @@
 #include "server.h"
-#include "log.h"
 #include "rpc.h"
+#include "logger.h"
+#include "pliops/simple_logger.h"
 #include "pliops/kv_pair_simple_serializer.h"
 
 #include <thread>
 #include <chrono>
+
+std::unique_ptr<ILogger> logger;
 
 using namespace Replicator;
 using namespace std::literals;
@@ -55,15 +58,16 @@ int main(int argc, char* argv[]) {
   std::string src_path;
   std::string client_ip;
   ParseArgs(argc, argv, parallelism, src_path, client_ip);
+  logger.reset(new SimpleLogger());
 
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, kv_pair_serializer);
   if (rc) {
-    log_message(FormatString("ProvideCheckpoint failed\n"));
+    logger->Log(LogLevel::ERROR, "ProvideCheckpoint failed\n");
     exit(1);
   }
 
-  log_message("All done!\n");
+  logger->Log(LogLevel::INFO, "All done!\n");
   return 0;
 }

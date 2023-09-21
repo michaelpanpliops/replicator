@@ -2,8 +2,6 @@
 #define KV_PAIR_SIMPLE_SERIALIZER_H
 
 #include "pliops/kv_pair_serializer.h"
-#include "log.h"
-
 
 namespace Replicator {
 

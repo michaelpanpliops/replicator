@@ -6,7 +6,8 @@
 #include <memory>
 
 #include "pliops/kv_pair_simple_serializer.h"
-#include "log.h"
+#include "utils/string_util.h"
+#include "logger.h"
 
 namespace Replicator {
 

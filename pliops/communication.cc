@@ -33,7 +33,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
       // Connection closed by other party (EOF).
       return 1;
     } else if (bytes_sent < 0) {
-      log_message(FormatString("Failed to send message size: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to send message size: %d\n", errno));
       return -1;
     }
     total_bytes_sent += bytes_sent;
@@ -44,7 +44,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
   while (total_bytes_sent < message.size()) {
     int bytes_sent = write(socket_fd_, message.data() + total_bytes_sent, message.size() - total_bytes_sent);
     if (bytes_sent <= 0) {
-      log_message(FormatString("Failed to send message body: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to send message body: %d\n", errno));
       return -1;
     }
     total_bytes_sent += bytes_sent;
@@ -66,7 +66,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
       // Connection closed by other party (EOF).
       return 1;
     } else if (bytes_read < 0) {
-      log_message(FormatString("Failed to read message size: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to read message size: %d\n", errno));
       return -1;
     }
     total_bytes_read += bytes_read;
@@ -74,7 +74,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
   if (message_size > MAX_MESSAGE_LENGTH) {
-    log_message(FormatString("Message is too big: %d\n", message_size));
+    logger->Log(LogLevel::ERROR, FormatString("Message is too big: %d\n", message_size));
     return -1;
   }
   // Allocate a buffer for the incoming message
@@ -84,7 +84,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   while (total_bytes_read < message_size) {
     int bytes_read = read(socket_fd_, buffer + total_bytes_read, message_size - total_bytes_read);
     if (bytes_read <= 0) {
-      log_message(FormatString("Failed to read message body: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to read message body: %d\n", errno));
       return -1;
     }
     total_bytes_read += bytes_read;
@@ -102,7 +102,7 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
 
   listenfd = socket(AF_INET, SOCK_STREAM, 0);
   if (-1 == listenfd) {
-    log_message(FormatString("Socket creation failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket creation failed: %d\n", errno));
     return -1;
   }
 
@@ -112,18 +112,18 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
   serv_addr.sin_port = htons(0);
 
   if ( -1 == bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) ) {
-    log_message(FormatString("Socket binding failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket binding failed: %d\n", errno));
     return -1;
   }
 
   if ( -1 == listen(listenfd, 1)) { //number_of_connections) ) {
-    log_message(FormatString("Socket listening failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket listening failed: %d\n", errno));
     return -1;
   }
 
   socklen_t len = sizeof(serv_addr);
   if ( -1 == getsockname(listenfd, (struct sockaddr*)&serv_addr, &len) ) {
-    log_message(FormatString("Socket getsockname failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket getsockname failed: %d\n", errno));
     return -1;
   }
 
@@ -143,7 +143,7 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
   struct sockaddr_in serv_addr; 
 
   if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    log_message(FormatString("Socket creation failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket creation failed: %d\n", errno));
     return -1;
   }
 
@@ -153,12 +153,12 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
   serv_addr.sin_port = htons(destination_port);
 
   if(inet_pton(AF_INET, destination_ip.c_str(), &serv_addr.sin_addr) <= 0) {
-    log_message(FormatString("Illegal server address: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Illegal server address: %d\n", errno));
     return -1;
   }
 
   if( connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    log_message(FormatString("Failed connecting socket: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: %d\n", errno));
     return -1;
   }
 

@@ -15,7 +15,8 @@
 #include <sys/types.h>
 #include <time.h>
 
-#include "log.h"
+#include "pliops/logger.h"
+#include "utils/string_util.h"
 #include "pliops/kv_pair_serializer.h"
 
 
@@ -55,10 +56,10 @@ static int accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   int connfd = 0;
   connfd = accept(listen_c.socket_fd_, (struct sockaddr*)NULL, NULL);
   if (connfd == -1) {
-    log_message(FormatString("Socket accepting failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket accepting failed: %d\n", errno));
     return -1;
   }
-  log_message(FormatString("Shard connected.\n"));
+  logger->Log(LogLevel::INFO, FormatString("Shard connected.\n"));
   accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
   return 0;
 }
