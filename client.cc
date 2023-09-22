@@ -11,9 +11,9 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer(uint64_t timeout_msec)
+CheckpointConsumer::CheckpointConsumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer)
 {
-  replication_consumer_ = std::make_unique<Replicator::Consumer>(timeout_msec);
+  replication_consumer_ = std::make_unique<Replicator::Consumer>(timeout_msec, kv_pair_serializer);
 }
 
 void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string& error)
@@ -21,7 +21,7 @@ void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string&
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
   std::lock_guard<std::mutex> lock(consumer_state_mutex_);
-  log_message(FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
+  logger->Log(LogLevel::INFO, FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
   consumer_state_ = state;
   consumer_error_ = error;
   consumer_state_cv_.notify_all();
@@ -32,7 +32,7 @@ int CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
   using namespace std::literals;
 
   // Wait till the consumer is done. 
-  log_message(FormatString("WaitForCompletion: %d msec\n", timeout_msec));
+  logger->Log(LogLevel::INFO, FormatString("WaitForCompletion: %d msec\n", timeout_msec));
   std::unique_lock lock(consumer_state_mutex_);
   auto rc = consumer_state_cv_.wait_for(lock, 1ms*timeout_msec, [&] { 
     return consumer_state_ == ConsumerState::ERROR || consumer_state_ == ConsumerState::DONE;
@@ -48,7 +48,7 @@ int CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id)
   CreateCheckpointResponse res{};
   auto rc = rpc.SendCommand(req, res);
   if (rc) {
-    log_message(FormatString("rpc.SendCommand failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("rpc.SendCommand failed\n"));
     return -1;
   }
   checkpoint_id_ = res.checkpoint_id;
@@ -63,7 +63,7 @@ int StartStreaming(RpcChannel &rpc, uint16_t port,
   StartStreamingResponse res{};
   auto rc = rpc.SendCommand(req, res);
   if (rc) {
-    log_message(FormatString("rpc.SendCommand failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("rpc.SendCommand failed\n"));
     return -1;
   }
   state = res.state;
@@ -77,7 +77,7 @@ int GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint6
   GetStatusResponse res;
   auto rc = rpc.SendCommand(req, res);
   if (rc) {
-    log_message(FormatString("rpc.SendCommand failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("rpc.SendCommand failed\n"));
     return -1;
   }
   state = res.state;
@@ -89,20 +89,20 @@ int GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint6
 // Main entry function 
 // Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
 int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
-                        int32_t desired_num_of_threads, uint64_t timeout_msec)
+                        int32_t desired_num_of_threads, uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer)
 {
   // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
   auto rc = CreateCheckpoint(rpc, shard, checkpoint_id);
   if (rc) {
-    log_message(FormatString("ReplicateCheckpoint failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     return -1;
   }
 
   // Create path for the replica
   std::string name = std::to_string(shard) + "_" + "replica";
   std::string replica_path = std::filesystem::path(dst_path)/name;
-  log_message(FormatString("Replica path: %s\n", replica_path));
+  logger->Log(LogLevel::INFO, FormatString("Replica path: %s\n", replica_path));
 
   // Cleanup replica path
   if (!std::filesystem::exists(replica_path)) {
@@ -110,13 +110,13 @@ int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_p
   } if (!std::filesystem::is_empty(replica_path)) {
     auto s = DestroyDB(replica_path, Options());
     if (!s.ok()) {
-      log_message(FormatString("DestroyDB failed: %s\n", s.ToString()));
+      logger->Log(LogLevel::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
       return -1;
     }
   }
 
   // Create consumer object
-  consumer_ = std::make_unique<CheckpointConsumer>(timeout_msec);
+  consumer_ = std::make_unique<CheckpointConsumer>(timeout_msec, kv_pair_serializer);  
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
@@ -127,7 +127,7 @@ int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_p
   uint16_t port;
   rc = consumer_->ConsumerImpl().Start(replica_path, port, done_cb);
   if (rc) {
-    log_message(FormatString("Consumer::Start failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Consumer::Start failed\n"));
     return -1;
   }
 
@@ -135,12 +135,12 @@ int ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_p
   ServerState server_status;
   rc = StartStreaming(rpc, port, desired_num_of_threads, server_status);
   if (rc) {
-    log_message(FormatString("ReplicateCheckpoint failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     return -1;
   }
 
   if (server_status != ServerState::IN_PROGRESS) {
-    log_message(FormatString("Server responded with error to StartStreaming\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Server responded with error to StartStreaming\n"));
     return -1;
   }
 
@@ -157,7 +157,7 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
   std::string error;
   auto rc = consumer_->ConsumerImpl().GetState(consumer_state, error);
   if (rc) {
-    log_message(FormatString("Consumer::GetState failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Consumer::GetState failed\n"));
     return -1;
   }
 
@@ -165,11 +165,11 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
   uint64_t client_num_kv_pairs, client_num_bytes;
   rc = consumer_->ConsumerImpl().GetStats(client_num_kv_pairs, client_num_bytes);
   if (rc) {
-    log_message(FormatString("Consumer::GetStats failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Consumer::GetStats failed\n"));
     return -1;
   }
   // Print statistics
-  log_message(FormatString(
+  logger->Log(LogLevel::INFO, FormatString(
               "Received by the client: num_kv_pairs = %lld, num_bytes = %lld, state = %s\n",
               client_num_kv_pairs, client_num_bytes, ToString(consumer_state)));
 
@@ -179,7 +179,7 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
   if (IsFinalState(consumer_state)) {
     rc = consumer_->ConsumerImpl().Stop();
     if (rc) {
-      log_message(FormatString("Consumer::Stop failed\n"));
+      logger->Log(LogLevel::ERROR, FormatString("Consumer::Stop failed\n"));
       return -1;
     }
     consumer_.reset();
@@ -194,12 +194,12 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
   uint64_t server_num_kv_pairs, server_num_bytes;
   rc = GetStatus(rpc, server_state, server_num_kv_pairs, server_num_bytes);
   if (rc) {
-    log_message(FormatString("GetStatus failed\n"));
+    logger->Log(LogLevel::ERROR, FormatString("GetStatus failed\n"));
     return -1;
   }
 
   // Print statistics
-  log_message(FormatString(
+  logger->Log(LogLevel::INFO, FormatString(
               "Transferred by the server: num_kv_pairs = %lld, num_bytes = %lld, state = %s\n",
               server_num_kv_pairs, server_num_bytes, ToString(server_state)));
 
@@ -210,13 +210,13 @@ int CheckReplicationStatus(RpcChannel& rpc, bool& done)
     // Wait for consumer to complete
     auto wait_rc = consumer_->WaitForCompletion(50000);
     if (wait_rc) {
-      log_message(FormatString("CheckpointProducer::WaitForCompletion failed\n"));
+      logger->Log(LogLevel::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       // return -1; - do not stop here, try to cleanup
     }
 
     rc = consumer_->ConsumerImpl().Stop();
     if (rc) {
-      log_message(FormatString("Consumer::Stop failed\n"));
+      logger->Log(LogLevel::ERROR, FormatString("Consumer::Stop failed\n"));
       return -1;
     }
     consumer_.reset();

@@ -5,49 +5,6 @@
 
 namespace Replicator {
 
-struct KvPairMessage {
-  void set_key_value(const char* key, uint32_t key_size, const char* value, uint32_t value_size)
-  {
-    uint32_t message_size = sizeof(key_size) + key_size + sizeof(value_size) + value_size;
-    buffer_.resize(message_size);
-    char* ptr = buffer_.data();
-    memcpy(ptr, &key_size, sizeof(key_size));
-    ptr += sizeof(key_size);
-    memcpy(ptr, key, key_size);
-    ptr += key_size;
-    memcpy(ptr, &value_size, sizeof(value_size));
-    ptr += sizeof(value_size);
-    memcpy(ptr, value, value_size);
-  }
-
-  std::pair<std::string, std::string> get_key_val(const char* buf, uint32_t buf_size)
-  {
-    std::string key, value;
-    uint32_t key_size, value_size;
-    if (buf_size < sizeof(key_size)) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)\n"));
-    }
-    memcpy(&key_size, buf, sizeof(key_size));
-    buf += sizeof(key_size);
-    if (buf_size < sizeof(key_size)+key_size) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size\n"));
-    }
-    key.assign(buf, key_size);
-    buf += key_size;
-    if (buf_size < sizeof(key_size)+key_size+sizeof(value_size)) {
-      throw std::runtime_error(FormatString("Bad message: buf_size < sizeof(key_size)+key_size+sizeof(value_size)\n"));
-    }
-    memcpy(&value_size, buf, sizeof(value_size));
-    buf += sizeof(value_size);
-    if (buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size) {
-      throw std::runtime_error(FormatString("Bad message: buf_size != sizeof(key_size)+key_size+sizeof(value_size)+value_size\n"));
-    }
-    value.assign(buf, value_size);
-    return {key, value};
-  }
-
-  std::vector<char> buffer_;
-};
 
 Connection<ConnectionType::TCP_SOCKET>::Connection(int socket_fd)
   : socket_fd_(socket_fd), closed_(false)
@@ -60,14 +17,14 @@ Connection<ConnectionType::TCP_SOCKET>::~Connection()
   }
 }
 
-int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size)
+int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer)
 {
   // Create the message
-  KvPairMessage message;
-  message.set_key_value(key, key_size, value, value_size);
+  std::vector<char> message;
+  kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
 
   // Send the size of the message
-  uint32_t message_size = htonl(message.buffer_.size());
+  uint32_t message_size = htonl(message.size());
 
   unsigned int total_bytes_sent = 0;
   while (total_bytes_sent < sizeof(uint32_t)) {
@@ -79,7 +36,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
       // Connection closed by other party (EOF).
       return 1;
     } else if (bytes_sent < 0) {
-      log_message(FormatString("Failed to send message size: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to send message size: %d\n", errno));
       return -1;
     }
     total_bytes_sent += bytes_sent;
@@ -87,13 +44,13 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 
   // Send the message
   total_bytes_sent = 0;
-  while (total_bytes_sent < message.buffer_.size()) {
+  while (total_bytes_sent < message.size()) {
   int bytes_sent = send(socket_fd_,
-                        message.buffer_.data() + total_bytes_sent,
-                        message.buffer_.size() - total_bytes_sent,
+                        message.data() + total_bytes_sent,
+                        message.size() - total_bytes_sent,
                         MSG_NOSIGNAL);
     if (bytes_sent <= 0) {
-      log_message(FormatString("Failed to send message body: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to send message body: %d\n", errno));
       return -1;
     }
     total_bytes_sent += bytes_sent;
@@ -104,7 +61,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 constexpr unsigned int MAX_MESSAGE_LENGTH_ON_STACK = 100 * 1024;
 
 // Receive a KV pair from the connection
-int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::string& value)
+int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer)
 {
   // Read the size of the incoming message from the socket
   char size_buffer[sizeof(uint32_t)];
@@ -118,14 +75,13 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
       // Connection closed by other party (EOF).
       return 1;
     } else if (bytes_read < 0) {
-      log_message(FormatString("Failed to read message size: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to read message size: %d\n", errno));
       return -1;
     }
     total_bytes_read += bytes_read;
   }
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
-
   // Allocate a buffer for the incoming message
   char* buffer;
   char buffer_on_stack[message_size];
@@ -144,14 +100,13 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
                           message_size - total_bytes_read,
                           0);
     if (bytes_read <= 0) {
-      log_message(FormatString("Failed to read message body: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed to read message body: %d\n", errno));
       return -1;
     }
     total_bytes_read += bytes_read;
   }
   // Parse the message
-  KvPairMessage message;
-  std::tie(key, value) = message.get_key_val(buffer, message_size);
+  std::tie(key, value) = kv_pair_serializer.Deserialize(buffer, message_size);
   return 0;
 }
 
@@ -171,35 +126,35 @@ int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
 
   int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &tv_timeout);
   if (select_result == -1) {
-    log_message(FormatString("select error: %s\n", strerror(errno)));
+    logger->Log(LogLevel::ERROR, FormatString("select error: %s\n", strerror(errno)));
     return -1;
   } else if (select_result == 0) {
-    log_message(FormatString("Accept timeout reached.\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Accept timeout reached.\n"));
     return -1;
   }
 
   int connfd = 0;
   connfd = accept(listen_c.socket_fd_, (struct sockaddr*)NULL, NULL);
   if (connfd == -1) {
-    log_message(FormatString("Socket accepting failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket accepting failed: %d\n", errno));
     return -1;
   }
 
   // SO_RCVTIMEO
   if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
-    log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+    logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
     close(connfd);
     return -1;
 }
 
   // SO_SNDTIMEO
   if (setsockopt(connfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
-    log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+    logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
     close(connfd);
     return -1;
   }
 
-  log_message(FormatString("Connection accepted.\n"));
+  logger->Log(LogLevel::INFO, FormatString("Connection accepted.\n"));
   accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
   return 0;
 }
@@ -212,7 +167,7 @@ int Bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
 
   listenfd = socket(AF_INET, SOCK_STREAM, 0);
   if (-1 == listenfd) {
-    log_message(FormatString("Socket creation failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket creation failed: %d\n", errno));
     return -1;
   }
 
@@ -222,18 +177,18 @@ int Bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
   serv_addr.sin_port = htons(0);
 
   if ( -1 == bind(listenfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) ) {
-    log_message(FormatString("Socket binding failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket binding failed: %d\n", errno));
     return -1;
   }
 
   if ( -1 == listen(listenfd, 1)) {
-    log_message(FormatString("Socket listening failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket listening failed: %d\n", errno));
     return -1;
   }
 
   socklen_t len = sizeof(serv_addr);
   if ( -1 == getsockname(listenfd, (struct sockaddr*)&serv_addr, &len) ) {
-    log_message(FormatString("Socket getsockname failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket getsockname failed: %d\n", errno));
     return -1;
   }
 
@@ -254,7 +209,7 @@ int Connect(const std::string& destination_ip, const uint32_t destination_port,
   struct sockaddr_in serv_addr; 
 
   if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    log_message(FormatString("Socket creation failed: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Socket creation failed: %d\n", errno));
     return -1;
   }
 
@@ -265,14 +220,14 @@ int Connect(const std::string& destination_ip, const uint32_t destination_port,
 
   // SO_RCVTIMEO
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
-      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
       close(sockfd);
       return -1;
   }
 
   // SO_SNDTIMEO
   if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
-      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+      logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
       close(sockfd);
       return -1;
   }
@@ -283,15 +238,15 @@ int Connect(const std::string& destination_ip, const uint32_t destination_port,
   serv_addr.sin_port = htons(destination_port);
 
   if(inet_pton(AF_INET, destination_ip.c_str(), &serv_addr.sin_addr) <= 0) {
-    log_message(FormatString("Illegal server address: %d\n", errno));
+    logger->Log(LogLevel::ERROR, FormatString("Illegal server address: %d\n", errno));
     return -1;
   }
 
   if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
     if (errno == EINPROGRESS) {
-      log_message(FormatString("Failed on timeout when connecting to socket: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed on timeout when connecting to socket: %d\n", errno));
     } else {
-      log_message(FormatString("Failed connecting socket: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Failed connecting socket: %d\n", errno));
     }
     close(sockfd);
     return -1;

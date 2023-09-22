@@ -15,7 +15,9 @@
 #include <sys/types.h>
 #include <time.h>
 
-#include "log.h"
+#include "pliops/logger.h"
+#include "utils/string_util.h"
+#include "pliops/kv_pair_serializer.h"
 
 
 namespace Replicator {
@@ -30,9 +32,9 @@ class Connection {
     static_assert("Unsupported protocol type");
   }
   // Send a KV pair over the connection
-  int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size);
+  int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
   // Receive a KV pair from the connection
-  int Receive(std::string& key, std::string& value);
+  int Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
 };
 
 template<>
@@ -40,8 +42,8 @@ class Connection<ConnectionType::TCP_SOCKET> {
   public:
     Connection(int socket_fd);
     virtual ~Connection();
-    int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size);
-    int Receive(std::string& key, std::string& value);
+    int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
+    int Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
 
   public:
     int socket_fd_;

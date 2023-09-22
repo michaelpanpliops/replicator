@@ -24,7 +24,7 @@ struct Statistics {
 
 class Consumer {
 public:
-  explicit Consumer(uint64_t timeout_msec);
+  explicit Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer);
   virtual ~Consumer();
   int Start(const std::string& replica_path, uint16_t& port,
             std::function<void(ConsumerState, const std::string&)>& done_callback);
@@ -45,6 +45,9 @@ private:
 
   // Statistics
   Statistics statistics_;
+
+  // Serialization
+  IKvPairSerializer& kv_pair_serializer_;
  
   // The KV pairs received over the network. The writer pull messages out of the queue.
   std::unique_ptr<ServerMessageQueue> message_queue_;

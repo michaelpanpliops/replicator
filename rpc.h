@@ -17,7 +17,8 @@
 #include <time.h>
 
 #include "defs.h"
-#include "log.h"
+#include "pliops/logger.h"
+#include "utils/string_util.h"
 
 
 using namespace Replicator;
@@ -68,11 +69,11 @@ public:
   int SendCommand(const Tin& in, Tout& out)
   {
     if (::send(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      log_message(FormatString("Rpc: Send failed: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
       return -1;
     }
     if (::recv(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      log_message(FormatString("Rpc: Recv failed: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
       return -1;
     }
     return 0;
@@ -85,16 +86,16 @@ public:
     Tout out;
 
     if (::recv(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      log_message(FormatString("Rpc: Recv failed: %d\n", errno));
+      logger->Log(LogLevel::ERROR,FormatString("Rpc: Recv failed: %d\n", errno));
       return -1;
     }
     auto rc = callback(in, out);
     if (rc) {
-      log_message(FormatString("Rpc: Send failed: callback\n"));
+      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: callback\n"));
       return -1;
     }
     if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      log_message(FormatString("Rpc: Send failed: %d\n", errno));
+      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
       return -1;
     }
     return 0;
