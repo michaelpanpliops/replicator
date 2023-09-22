@@ -71,7 +71,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
 
   unsigned int total_bytes_sent = 0;
   while (total_bytes_sent < sizeof(uint32_t)) {
-    int bytes_sent = write(socket_fd_, reinterpret_cast<char*>(&message_size) + total_bytes_sent, sizeof(uint32_t) - total_bytes_sent);
+    int bytes_sent = send(socket_fd_,
+                          reinterpret_cast<char*>(&message_size) + total_bytes_sent,
+                          sizeof(uint32_t) - total_bytes_sent,
+                          MSG_NOSIGNAL);
     if (bytes_sent == 0 && errno == 0) {
       // Connection closed by other party (EOF).
       return 1;
@@ -85,7 +88,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t key_s
   // Send the message
   total_bytes_sent = 0;
   while (total_bytes_sent < message.buffer_.size()) {
-    int bytes_sent = write(socket_fd_, message.buffer_.data() + total_bytes_sent, message.buffer_.size() - total_bytes_sent);
+  int bytes_sent = send(socket_fd_,
+                        message.buffer_.data() + total_bytes_sent,
+                        message.buffer_.size() - total_bytes_sent,
+                        MSG_NOSIGNAL);
     if (bytes_sent <= 0) {
       log_message(FormatString("Failed to send message body: %d\n", errno));
       return -1;
@@ -104,7 +110,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   char size_buffer[sizeof(uint32_t)];
   unsigned int total_bytes_read = 0;
   while (total_bytes_read < sizeof(uint32_t)) {
-    int bytes_read = read(socket_fd_, size_buffer + total_bytes_read, sizeof(uint32_t) - total_bytes_read);
+    int bytes_read = recv(socket_fd_,
+                          size_buffer + total_bytes_read,
+                          sizeof(uint32_t) - total_bytes_read,
+                          0);
     if (bytes_read == 0 && errno == 0) {
       // Connection closed by other party (EOF).
       return 1;
@@ -116,6 +125,7 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   }
   uint32_t message_size = *reinterpret_cast<uint32_t*>(size_buffer);
   message_size = ntohl(message_size);
+
   // Allocate a buffer for the incoming message
   char* buffer;
   char buffer_on_stack[message_size];
@@ -129,7 +139,10 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
   // Read the message from the socket
   total_bytes_read = 0;
   while (total_bytes_read < message_size) {
-    int bytes_read = read(socket_fd_, buffer + total_bytes_read, message_size - total_bytes_read);
+    int bytes_read = recv(socket_fd_,
+                          buffer + total_bytes_read,
+                          message_size - total_bytes_read,
+                          0);
     if (bytes_read <= 0) {
       log_message(FormatString("Failed to read message body: %d\n", errno));
       return -1;
@@ -143,7 +156,56 @@ int Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std::strin
 }
 
 template<>
-int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& listen_c)
+int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
+  std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
+  uint64_t timeout_msec)
+{
+  // Use select to monitor the server socket for incoming connections with a timeout
+  fd_set read_fds;
+  FD_ZERO(&read_fds);
+  FD_SET(listen_c.socket_fd_, &read_fds);
+
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout_msec / 1000;
+  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
+
+  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &tv_timeout);
+  if (select_result == -1) {
+    log_message(FormatString("select error: %s\n", strerror(errno)));
+    return -1;
+  } else if (select_result == 0) {
+    log_message(FormatString("Accept timeout reached.\n"));
+    return -1;
+  }
+
+  int connfd = 0;
+  connfd = accept(listen_c.socket_fd_, (struct sockaddr*)NULL, NULL);
+  if (connfd == -1) {
+    log_message(FormatString("Socket accepting failed: %d\n", errno));
+    return -1;
+  }
+
+  // SO_RCVTIMEO
+  if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+    log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+    close(connfd);
+    return -1;
+}
+
+  // SO_SNDTIMEO
+  if (setsockopt(connfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+    log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+    close(connfd);
+    return -1;
+  }
+
+  log_message(FormatString("Connection accepted.\n"));
+  accept_c.reset(new Connection<ConnectionType::TCP_SOCKET>(connfd));
+  return 0;
+}
+
+template<>
+int Bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& listen_c)
 {
   int listenfd = 0, connfd = 0;
   struct sockaddr_in serv_addr;
@@ -164,7 +226,7 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
     return -1;
   }
 
-  if ( -1 == listen(listenfd, 1)) { //number_of_connections) ) {
+  if ( -1 == listen(listenfd, 1)) {
     log_message(FormatString("Socket listening failed: %d\n", errno));
     return -1;
   }
@@ -184,8 +246,9 @@ int bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>
 }
 
 template<>
-int connect(const std::string& destination_ip, const uint32_t destination_port,
-            std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection)
+int Connect(const std::string& destination_ip, const uint32_t destination_port,
+            std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection,
+            uint64_t timeout_msec)
 {
   int sockfd = 0;
   struct sockaddr_in serv_addr; 
@@ -193,6 +256,25 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
   if((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     log_message(FormatString("Socket creation failed: %d\n", errno));
     return -1;
+  }
+
+  // Set the timeout
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout_msec / 1000;
+  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
+
+  // SO_RCVTIMEO
+  if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      close(sockfd);
+      return -1;
+  }
+
+  // SO_SNDTIMEO
+  if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
+      log_message(FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+      close(sockfd);
+      return -1;
   }
 
   memset(&serv_addr, '0', sizeof(serv_addr)); 
@@ -205,8 +287,13 @@ int connect(const std::string& destination_ip, const uint32_t destination_port,
     return -1;
   }
 
-  if( connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    log_message(FormatString("Failed connecting socket: %d\n", errno));
+  if(connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    if (errno == EINPROGRESS) {
+      log_message(FormatString("Failed on timeout when connecting to socket: %d\n", errno));
+    } else {
+      log_message(FormatString("Failed connecting socket: %d\n", errno));
+    }
+    close(sockfd);
     return -1;
   }
 

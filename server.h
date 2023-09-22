@@ -13,7 +13,8 @@
 int ProvideCheckpoint(RpcChannel& rpc,
                       const std::string &src_path,
                       const std::string& client_ip,
-                      int parallelism);
+                      int parallelism,
+                      uint64_t timeout_msec);
 
 class CheckpointProducer
 {
@@ -23,7 +24,7 @@ public:
 
   // Client requests processing methods
   int CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
+  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout_msec);
   int GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup
@@ -49,5 +50,5 @@ private:
   std::condition_variable producer_state_cv_;
 
   // Pliops replication producer
-  std::unique_ptr<Replicator::Producer> producer_;  
+  std::unique_ptr<Replicator::Producer> producer_;
 };
