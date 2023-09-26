@@ -157,13 +157,13 @@ int Consumer::Start(const std::string& replica_path, uint16_t& port,
   start_time_ = std::chrono::system_clock::now();
 
   // Start writer thread
-  logger->Log(LogLevel::ERROR, "Starting writer thread\n");
+  logger->Log(LogLevel::INFO, "Starting writer thread\n");
   writer_thread_ = std::make_unique<std::thread>([this]() {
     this->WriterThread();
   });
 
   // Start the communication thread
-  logger->Log(LogLevel::ERROR, "Starting communication thread\n");
+  logger->Log(LogLevel::INFO, "Starting communication thread\n");
   communication_thread_ =  std::make_unique<std::thread>([this]() {
     this->CommunicationThread();
   });

@@ -235,7 +235,7 @@ int Producer::Start(const std::string& ip, uint16_t port,
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
   rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
   if (rc) {
-    logger->Log(LogLevel::INFO, "Socket connect failed\n");
+    logger->Log(LogLevel::ERROR, "Socket connect failed\n");
     return -1;
   }
   logger->Log(LogLevel::INFO, FormatString("Connected\n"));

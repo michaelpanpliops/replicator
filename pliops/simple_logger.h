@@ -12,6 +12,7 @@ class SimpleLogger : public ILogger {
 
   void Log(LogLevel level, const std::string& message) override;
   std::string GetCurrentTimeString();
+  std::string GetSeverity(LogLevel level);
 };
 
 

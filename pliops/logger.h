@@ -5,9 +5,9 @@
 #include <memory>
 
 enum class LogLevel {
-    DEBUG,
-    INFO,
-    WARNING,
+    DEBUG = 0,
+    INFO = 1,
+    WARNING = 2,
     ERROR
 };
 

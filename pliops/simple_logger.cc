@@ -12,7 +12,8 @@
 void SimpleLogger::Log(LogLevel level, const std::string& message) {
   std::unique_lock lock(message_lock);
   auto current_time = GetCurrentTimeString();
-  std::cout << FormatString("[%s]  %s", current_time, message);
+  auto severity = GetSeverity(level);
+  std::cout << FormatString("[%s][%s]  %s", current_time, severity, message);
 }
 
 std::string SimpleLogger::GetCurrentTimeString() {
@@ -25,4 +26,20 @@ std::string SimpleLogger::GetCurrentTimeString() {
   oss << std::put_time(tm, "%Y-%m-%d %H:%M:%S") << "." << std::setw(6) << std::setfill('0') << (us % 1000000).count();
 
   return oss.str();
+}
+
+std::string SimpleLogger::GetSeverity(LogLevel level) {
+  switch (level)
+  {
+  case LogLevel::DEBUG:
+    return "DEBUG";
+  case LogLevel::ERROR:
+    return "ERROR";
+  case LogLevel::INFO:
+    return "INFO";
+  case LogLevel::WARNING:
+    return "WARNING";
+  default:
+    return "unknown";
+  }
 }
