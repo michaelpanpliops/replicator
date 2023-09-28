@@ -10,7 +10,7 @@
 
 
 // The main function for shard replication
-int ProvideCheckpoint(RpcChannel& rpc,
+RepStatus ProvideCheckpoint(RpcChannel& rpc,
                       const std::string &src_path,
                       const std::string& client_ip,
                       int parallelism,
@@ -24,14 +24,14 @@ public:
   ~CheckpointProducer() {}
 
   // Client requests processing methods
-  int CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  int StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout_msec);
-  int GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+  RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
+  RepStatus StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout_msec);
+  RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup
   void ReplicationDone(ProducerState state, const std::string& error);
-  int WaitForCompletion(uint32_t timeout_msec);
-  int DestroyCheckpoint();
+  RepStatus WaitForCompletion(uint32_t timeout_msec);
+  RepStatus DestroyCheckpoint();
 
   // The client_done_ is set to true after sending client ERROR or DONE
   bool IsClientDone() { return client_done_; };

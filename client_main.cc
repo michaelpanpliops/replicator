@@ -76,8 +76,8 @@ int main(int argc, char* argv[]) {
   RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout_msec, kv_pair_serializer);
-  if (rc) {
-    logger->Log(LogLevel::INFO, FormatString("ReplicateCheckpoint failed\n"));
+  if (!rc.IsOk()) {
+    logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     exit(1);
   }
 
@@ -85,12 +85,12 @@ int main(int argc, char* argv[]) {
   while (!done) {
     std::this_thread::sleep_for(10s);
     rc = CheckReplicationStatus(rpc, done);
-    if (rc) {
-      logger->Log(LogLevel::ERROR, FormatString("CheckReplicationStatus failed\n"));
+    if (!rc.IsOk()) {
+      logger->Log(Severity::ERROR, FormatString("CheckReplicationStatus failed\n"));
       exit(1);
     }
   }
 
-  logger->Log(LogLevel::INFO, "All done!\n");
+  logger->Log(Severity::INFO, "All done!\n");
   return 0;
 }

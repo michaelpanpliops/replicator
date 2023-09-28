@@ -19,7 +19,7 @@ Producer::~Producer()
   }
 }
 
-int Producer::OpenShard(const std::string& shard_path)
+RepStatus Producer::OpenShard(const std::string& shard_path)
 {
   ROCKSDB_NAMESPACE::DB* db;
   ROCKSDB_NAMESPACE::Options options;
@@ -34,17 +34,17 @@ int Producer::OpenShard(const std::string& shard_path)
 #endif
   auto status = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!status.ok()) {
-    logger->Log(LogLevel::ERROR, FormatString("Failed to open shard, reason: %s", status.ToString()));
-    return -1;
+    logger->Log(Severity::ERROR, FormatString("Failed to open shard, reason: %s", status.ToString()));
+    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, FormatString("Failed to open shard, reason: %s", status.ToString()));
   }
 
   shard_ = db;
-  return 0;
+  return RepStatus();
 }
 
 void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id) {
   uint64_t total_number_of_operations = 0;
-  logger->Log(LogLevel::INFO, FormatString("Reader thread #%d started\n", thread_id));
+  logger->Log(Severity::INFO, FormatString("Reader thread #%d started\n", thread_id));
 
   ROCKSDB_NAMESPACE::ColumnFamilyDescriptor cf_desc;
   ROCKSDB_NAMESPACE::DB* db;
@@ -53,9 +53,9 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
 
   db = shard_;
   range = thread_key_ranges_[thread_id];
-  Status status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
+  auto status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
   if (!status.ok()) {
-    logger->Log(LogLevel::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
+    logger->Log(Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
     SetState(ProducerState::ERROR, "");
     return;
   }
@@ -66,7 +66,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor;
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
-    logger->Log(LogLevel::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
+    logger->Log(Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
     SetState(ProducerState::ERROR, "");
     return;
   }
@@ -105,7 +105,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
         status = iterator->Close();
         delete iterator;
 
-        logger->Log(LogLevel::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
+        logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
         SetState(ProducerState::ERROR, "");
         return;
       }
@@ -123,13 +123,13 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
 
     iterator->Next();
   }
-  logger->Log(LogLevel::INFO, FormatString("Reader thread #%d ended. Performed %lld operations.\n", thread_id, total_number_of_operations));
+  logger->Log(Severity::INFO, FormatString("Reader thread #%d ended. Performed %lld operations.\n", thread_id, total_number_of_operations));
 
   // Release the iterator
   status = iterator->Close();
   delete iterator;
   if (!status.ok()) {
-    logger->Log(LogLevel::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
+    logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
     SetState(ProducerState::ERROR, "");
   }
 
@@ -143,18 +143,18 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
 }
 
 void Producer::CommunicationThread() {
-  logger->Log(LogLevel::INFO, FormatString("Communication thread started.\n"));
+  logger->Log(Severity::INFO, FormatString("Communication thread started.\n"));
   std::string key, value;
   while(!kill_) {
     std::pair<std::string, std::string> message;
     if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
-      logger->Log(LogLevel::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
+      logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
       SetState(ProducerState::ERROR, "");
       return;
     }
     auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size(), kv_pair_serializer_);
-    if (rc) {
-      logger->Log(LogLevel::ERROR, FormatString("Communication thread: connection_->Send failed\n"));
+    if (!rc.IsOk()) {
+      logger->Log(Severity::ERROR, FormatString("Communication thread: connection_->Send failed\n"));
       SetState(ProducerState::ERROR, "");
       return;
     }
@@ -165,27 +165,27 @@ void Producer::CommunicationThread() {
       delete shard_;
       shard_ = nullptr;
       if (!status.ok()) {
-        logger->Log(LogLevel::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
+        logger->Log(Severity::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
         SetState(ProducerState::ERROR, "");
         return;
       }
 
       // Print out replication performance metrics
-      logger->Log(LogLevel::INFO, FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n",
+      logger->Log(Severity::INFO, FormatString("Stat.num_kv_pairs: %lld, Stat.num_bytes: %lld \n",
                   statistics_.num_kv_pairs.load(), statistics_.num_bytes.load()));
       auto current_time = std::chrono::system_clock::now();
       auto elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(current_time - start_time_);
-      logger->Log(LogLevel::INFO, FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
-      logger->Log(LogLevel::INFO, FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
+      logger->Log(Severity::INFO, FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
+      logger->Log(Severity::INFO, FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
 
       SetState(ProducerState::DONE, "");
       return;
     }
   }
-  logger->Log(LogLevel::INFO, FormatString("Communication thread ended.\n"));
+  logger->Log(Severity::INFO, FormatString("Communication thread ended.\n"));
 }
 
-int Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges) {
+RepStatus Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges) {
   // Calculate ranges
   auto db = shard_;
   ROCKSDB_NAMESPACE::ColumnFamilyHandle* cf_handle = db->DefaultColumnFamily();
@@ -194,8 +194,8 @@ int Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<
 
   auto status = CalcKeyRanges(db, cf_handle, max_num_of_threads, range_split_keys);
   if (!status.ok()) {
-    logger->Log(LogLevel::ERROR, FormatString("Error in CalcKeyRanges: %s", status.ToString()));
-    return -1;
+    logger->Log(Severity::ERROR, FormatString("Error in CalcKeyRanges: %s", status.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in CalcKeyRanges: %s", status.ToString()));
   }
 
   // Create vector of ranges
@@ -208,10 +208,10 @@ int Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<
     range.second = (i == range_split_keys.size() - 1) ? std::optional<std::string>() : range_split_keys[i+1];
     ranges.push_back(range);
   }
-  return 0;
+  return RepStatus();
 }
 
-int Producer::Start(const std::string& ip, uint16_t port,
+RepStatus Producer::Start(const std::string& ip, uint16_t port,
                     uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
                     std::function<void(ProducerState, const std::string&)>& done_callback)
 {
@@ -223,33 +223,33 @@ int Producer::Start(const std::string& ip, uint16_t port,
   SetState(ProducerState::IN_PROGRESS, "");
 
   // Split into ranges
-  auto rc = CalculateThreadKeyRanges(max_num_of_threads, thread_key_ranges_);
-  if (rc) {
-    logger->Log(LogLevel::ERROR, "CalculateThreadKeyRanges failed\n");
-    return -1;
+  RepStatus rc = CalculateThreadKeyRanges(max_num_of_threads, thread_key_ranges_);
+  if (!rc.IsOk()) {
+    logger->Log(Severity::ERROR, "CalculateThreadKeyRanges failed\n");
+    return rc;
   }
-  logger->Log(LogLevel::INFO, FormatString("Shard is split into %d read ranges\n", thread_key_ranges_.size()));
+  logger->Log(Severity::INFO, FormatString("Shard is split into %d read ranges\n", thread_key_ranges_.size()));
 
   // Connect to consumer
-  logger->Log(LogLevel::INFO, "Connecting to consumer...\n");
+  logger->Log(Severity::INFO, "Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
   rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
-  if (rc) {
-    logger->Log(LogLevel::ERROR, "Socket connect failed\n");
-    return -1;
+  if (!rc.IsOk()) {
+    logger->Log(Severity::ERROR, "Socket connect failed\n");
+    return rc;
   }
-  logger->Log(LogLevel::INFO, FormatString("Connected\n"));
+  logger->Log(Severity::INFO, FormatString("Connected\n"));
 
   start_time_ = std::chrono::system_clock::now();
 
   // Start the communication thread
-  logger->Log(LogLevel::INFO, "Starting communication thread\n");
+  logger->Log(Severity::INFO, "Starting communication thread\n");
   communication_thread_ = std::make_unique<std::thread>([this]() {
     this->CommunicationThread();
   });
 
   // Start the reader threads
-  logger->Log(LogLevel::INFO, "Starting reader threads\n");
+  logger->Log(Severity::INFO, "Starting reader threads\n");
   assert(max_num_of_threads >= thread_key_ranges_.size());
   auto threads_per_shard = thread_key_ranges_.size();
 
@@ -260,7 +260,7 @@ int Producer::Start(const std::string& ip, uint16_t port,
     }));
   }
 
-  return 0;
+  return RepStatus();
 }
 
 void Producer::StopImpl()
@@ -289,7 +289,7 @@ void Producer::StopImpl()
   }
 }
 
-int Producer::Stop()
+RepStatus Producer::Stop()
 {
   using namespace std::literals;
 
@@ -299,30 +299,30 @@ int Producer::Stop()
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Producer::StopImpl, this);
   if (future->wait_for(10s) == std::future_status::timeout) {
-    logger->Log(LogLevel::ERROR, "Stop failed, some threads are stuck.\n");
+    logger->Log(Severity::ERROR, "Stop failed, some threads are stuck.\n");
     // If the app will try destroy the Producer object, it will crash
-    return -1;
+    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "Stop failed, some threads are stuck.\n");
   } else {
     delete future;
   }
 
-  logger->Log(LogLevel::INFO, "Producer finished its jobs.\n");
-  return 0;
+  logger->Log(Severity::INFO, "Producer finished its jobs.\n");
+  return RepStatus();
 }
 
-int Producer::GetState(ProducerState& state, std::string& error)
+RepStatus Producer::GetState(ProducerState& state, std::string& error)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   state = state_;
   error = error_;
-  return 0;
+  return RepStatus();
 }
 
-int Producer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
+RepStatus Producer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
   num_kv_pairs = statistics_.num_kv_pairs;
   num_bytes = statistics_.num_bytes;
-  return 0;
+  return RepStatus();
 }
 
 void Producer::SetState(const ProducerState& state, const std::string& error)

@@ -9,11 +9,14 @@
 #include "defs.h"
 #include "rocksdb/db.h"
 #include "utils/blocking_concurrent_queue.h"
+#include "pliops/status.h"
 
 
 namespace Replicator {
 
 using ProducerState = Replicator::State;
+using DBStatus = ROCKSDB_NAMESPACE::Status;
+using RepStatus = Replicator::Status;
 
 using RangeType = std::pair<std::optional<std::string>, std::optional<std::string>>;
 using MessageQueue = moodycamel::BlockingConcurrentQueue<std::pair<std::string, std::string>>;
@@ -28,13 +31,13 @@ class Producer {
 public:
   explicit Producer(IKvPairSerializer& kv_pair_serializer);
   virtual ~Producer();
-  int OpenShard(const std::string& shard_path);
-  int Start(const std::string& ip, uint16_t port,
+  RepStatus OpenShard(const std::string& shard_path);
+  RepStatus Start(const std::string& ip, uint16_t port,
             uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
             std::function<void(ProducerState, const std::string&)>& done_callback);
-  int Stop();
-  int GetState(ProducerState& state, std::string& error);
-  int GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
+  RepStatus Stop();
+  RepStatus GetState(ProducerState& state, std::string& error);
+  RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
@@ -61,7 +64,7 @@ private:
 
   // Key range per reader thread
   std::vector<RangeType> thread_key_ranges_;
-  int CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges);
+  RepStatus CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges);
 
   // Signal threads to exit
   std::atomic<bool> kill_;

@@ -32,6 +32,7 @@ set(SOURCES
     pliops/kv_pair_simple_serializer.cc
     pliops/producer.cc
     pliops/simple_logger.cc
+    pliops/status.cc
     )
 
 add_compile_options(-Wno-format-security)

@@ -8,15 +8,16 @@
 #include "rocksdb/status.h"
 #include "rpc.h"
 #include "consumer.h"
+#include "pliops/status.h"
 
 
-int ReplicateCheckpoint(RpcChannel& rpc,
+RepStatus ReplicateCheckpoint(RpcChannel& rpc,
                         int32_t shard,
                         const std::string &dst_path,
                         int32_t desired_num_of_threads,
                         uint64_t timeout_msec,
                         IKvPairSerializer& kv_pair_serializer);
-int CheckReplicationStatus(RpcChannel& rpc, bool& done);
+RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done);
 
 class CheckpointConsumer
 {
@@ -29,7 +30,7 @@ public:
 
   // Synchronization and cleanup
   void ReplicationDone(ConsumerState state, const std::string& error);
-  int WaitForCompletion(uint32_t timeout_msec);
+  RepStatus WaitForCompletion(uint32_t timeout_msec);
 
 private:
   // Consumer state and its error are updated in the ReplicationDone callback

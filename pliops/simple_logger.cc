@@ -9,7 +9,7 @@
 #include "utils/string_util.h"
 
 
-void SimpleLogger::Log(LogLevel level, const std::string& message) {
+void SimpleLogger::Log(Severity level, const std::string& message) {
   std::unique_lock lock(message_lock);
   auto current_time = GetCurrentTimeString();
   auto severity = GetSeverity(level);
@@ -28,16 +28,16 @@ std::string SimpleLogger::GetCurrentTimeString() {
   return oss.str();
 }
 
-std::string SimpleLogger::GetSeverity(LogLevel level) {
+std::string SimpleLogger::GetSeverity(Severity level) {
   switch (level)
   {
-  case LogLevel::DEBUG:
+  case Severity::DEBUG:
     return "DEBUG";
-  case LogLevel::ERROR:
+  case Severity::ERROR:
     return "ERROR";
-  case LogLevel::INFO:
+  case Severity::INFO:
     return "INFO";
-  case LogLevel::WARNING:
+  case Severity::WARNING:
     return "WARNING";
   default:
     return "unknown";

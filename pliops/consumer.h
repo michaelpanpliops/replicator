@@ -13,6 +13,8 @@
 namespace Replicator {
 
 using ConsumerState = Replicator::State;
+using DBStatus = ROCKSDB_NAMESPACE::Status;
+using RepStatus = Replicator::Status;
 
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
 constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
@@ -26,11 +28,11 @@ class Consumer {
 public:
   explicit Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer);
   virtual ~Consumer();
-  int Start(const std::string& replica_path, uint16_t& port,
+  RepStatus Start(const std::string& replica_path, uint16_t& port,
             std::function<void(ConsumerState, const std::string&)>& done_callback);
-  int Stop();
-  int GetState(ConsumerState& state, std::string& error);
-  int GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
+  RepStatus Stop();
+  RepStatus GetState(ConsumerState& state, std::string& error);
+  RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
@@ -54,7 +56,7 @@ private:
 
   // DB
   ROCKSDB_NAMESPACE::DB* shard_ = nullptr;
-  int OpenReplica(const std::string& replica_path);
+  RepStatus OpenReplica(const std::string& replica_path);
 
   // Signal threads to exit
   std::atomic<bool> kill_;

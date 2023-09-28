@@ -69,11 +69,11 @@ int main(int argc, char* argv[]) {
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, timeout_msec, kv_pair_serializer);
-  if (rc) {
-    logger->Log(LogLevel::ERROR, "ProvideCheckpoint failed\n");
+  if (!rc.IsOk()) {
+    logger->Log(Severity::ERROR, "ProvideCheckpoint failed\n");
     exit(1);
   }
 
-  logger->Log(LogLevel::INFO, "All done!\n");
+  logger->Log(Severity::INFO, "All done!\n");
   return 0;
 }

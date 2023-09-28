@@ -3,6 +3,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+enum class Severity {
+    DEBUG = 0,
+    INFO = 1,
+    WARNING = 2,
+    ERROR
+};
+
 namespace Replicator {
 
 enum class State : uint32_t {
