@@ -87,8 +87,7 @@ private:
 
   // Enqueue limit timeout
   bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
-                     ROCKSDB_NAMESPACE::Slice& key,
-                     ROCKSDB_NAMESPACE::Slice& value,
+                     std::pair<std::string, std::string>&& message,
                      std::atomic<bool>& kill,
                      uint64_t timeout_msec);
 };

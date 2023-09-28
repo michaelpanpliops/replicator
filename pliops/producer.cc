@@ -79,9 +79,9 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     iterator->SeekToFirst();
   }
 
-  ROCKSDB_NAMESPACE::Slice key, value;
   while(!kill_) {
     // Send the next KV pair.
+    ROCKSDB_NAMESPACE::Slice key, value;
     if(!iterator->Valid()){
       break; // Finished reading range for this thread.
     }
@@ -96,7 +96,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
 
     iterator->Next();
 
-    if (!EnqueueTimed(message_queue_, key, value, kill_, timeout_msec_)) {
+    if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, timeout_msec_)) {
       // We must release the iterator here, otherwise DB::Close will crash
       status = iterator->Close();
       delete iterator;
@@ -124,11 +124,9 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   std::lock_guard<std::mutex> lock(active_reader_threads_mutex_);
   active_reader_threads_count_--;
   // The last active thread signals end of communications
-  key.clear();
-  value.clear();
-  if (active_reader_threads_count_ == 0 && EnqueueTimed(message_queue_, key, value, kill_, timeout_msec_)) {
+  if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_)) {
       logger->Log(LogLevel::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-      SetState(ProducerState::ERROR, ""); 
+      SetState(ProducerState::ERROR, "");
   }
 }
 
@@ -266,8 +264,7 @@ void Producer::StopImpl()
 
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
-  ROCKSDB_NAMESPACE::Slice key, value;
-  if (!EnqueueTimed(message_queue_, key, value, kill_, timeout_msec_) ) {
+  if (!EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_) ) {
       logger->Log(LogLevel::ERROR, FormatString("enqueue failed, reason: timeout\n"));
       SetState(ProducerState::ERROR, "");
   }
@@ -335,25 +332,25 @@ void Producer::SetState(const ProducerState& state, const std::string& error)
 }
 
 bool Producer::EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
-                   ROCKSDB_NAMESPACE::Slice& key,
-                   ROCKSDB_NAMESPACE::Slice& value,
+                   std::pair<std::string, std::string>&& message,
                    std::atomic<bool>& kill,
                    uint64_t timeout_msec) {
   std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-  bool enqueued = true;
+  bool enqueued = false;
   while (!enqueued && !kill) {
-    enqueued = message_queue->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});
+    enqueued = message_queue->try_enqueue(message);
 
-    auto current_time = std::chrono::steady_clock::now();
-    auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
-        
-    if (elapsed_time.count() >= timeout_msec) {
-      return false;
-    }
-    
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if (!enqueued) {
+      auto current_time = std::chrono::steady_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+
+      if (elapsed_time.count() >= timeout_msec) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }  
   }
-  return true;
+  return enqueued;
 }
 
 }
