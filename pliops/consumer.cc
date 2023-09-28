@@ -82,7 +82,7 @@ void Consumer::CommunicationThread()
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
   auto rc = Accept(*connection_, connection, timeout_msec_);
   if (!rc.IsOk()) {
-    logger->Log(Severity::ERROR, FormatString("Communication thread: accept failed\n"));
+    logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
     SetState(ConsumerState::ERROR, "");
     return;
   }
@@ -91,7 +91,7 @@ void Consumer::CommunicationThread()
   while(!kill_) {
     rc = connection->Receive(key, value, kv_pair_serializer_);
     if (!rc.IsOk()) {
-      logger->Log(Severity::ERROR, "Communication thread: recv failed.\n");
+      logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
       SetState(ConsumerState::ERROR, "");
       return;
     }
