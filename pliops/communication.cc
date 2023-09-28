@@ -1,6 +1,7 @@
 #include "communication.h"
 
 #include <functional>
+#include <poll.h>
 
 
 namespace Replicator {
@@ -115,21 +116,16 @@ int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
   uint64_t timeout_msec)
 {
-  // Use select to monitor the server socket for incoming connections with a timeout
-  fd_set read_fds;
-  FD_ZERO(&read_fds);
-  FD_SET(listen_c.socket_fd_, &read_fds);
+  int nfds = 1;
+  struct pollfd fds[nfds];
+  fds[0].fd = listen_c.socket_fd_;
+  fds[0].events = POLLIN;
 
-  struct timeval tv_timeout;
-  tv_timeout.tv_sec = timeout_msec / 1000;
-  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
+  int ret = poll(fds, nfds, timeout_msec);
 
-  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &tv_timeout);
-  if (select_result == -1) {
-    logger->Log(LogLevel::ERROR, FormatString("select error: %s\n", strerror(errno)));
-    return -1;
-  } else if (select_result == 0) {
-    logger->Log(LogLevel::ERROR, FormatString("Accept timeout reached.\n"));
+  if (ret == 0) {
+    return -1; // timeout
+  } else if (ret == -1 || !(fds[0].revents & POLLIN)) {
     return -1;
   }
 
@@ -139,6 +135,10 @@ int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
     logger->Log(LogLevel::ERROR, FormatString("Socket accepting failed: %d\n", errno));
     return -1;
   }
+
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout_msec / 1000;
+  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
 
   // SO_RCVTIMEO
   if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
