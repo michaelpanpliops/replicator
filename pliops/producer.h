@@ -84,6 +84,13 @@ private:
   std::string error_;
   std::mutex state_mutex_;
   void SetState(const ProducerState& state, const std::string& error);
+
+  // Enqueue limit timeout
+  bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
+                     ROCKSDB_NAMESPACE::Slice& key,
+                     ROCKSDB_NAMESPACE::Slice& value,
+                     std::atomic<bool>& kill,
+                     uint64_t timeout_msec);
 };
 
 }
