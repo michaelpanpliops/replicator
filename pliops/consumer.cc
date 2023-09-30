@@ -10,8 +10,13 @@
 
 namespace Replicator {
 
-Consumer::Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer)
-  : kill_(false), timeout_msec_(timeout_msec), kv_pair_serializer_(kv_pair_serializer)
+Consumer::Consumer(
+  uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
+  IKvPairSerializer& kv_pair_serializer)
+  : kill_(false)
+  , ops_timeout_msec_(ops_timeout_msec)
+  , connect_timeout_msec_(connect_timeout_msec)
+  , kv_pair_serializer_(kv_pair_serializer)
 {}
 
 Consumer::~Consumer() {
@@ -27,7 +32,7 @@ void Consumer::WriterThread() {
   while(!kill_) {
     // Pop the next KV pair.
     std::pair<std::string,std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
       SetState(ConsumerState::ERROR, "");
       return;
@@ -80,7 +85,7 @@ void Consumer::CommunicationThread()
 {
   logger->Log(Severity::INFO, FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
-  auto rc = Accept(*connection_, connection, timeout_msec_);
+  auto rc = Accept(*connection_, connection, connect_timeout_msec_);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Communication thread: accept failed\n"));
     SetState(ConsumerState::ERROR, "");
@@ -95,7 +100,7 @@ void Consumer::CommunicationThread()
       SetState(ConsumerState::ERROR, "");
       return;
     }
-    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_msec_))) {
+    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
       SetState(ConsumerState::ERROR, "");
       return;

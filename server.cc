@@ -14,8 +14,11 @@ uint32_t GetUniqueCheckpointName() { return 12345; }
 }
 
 CheckpointProducer::CheckpointProducer(
-  const std::string &src_path, const std::string& client_ip, int parallelism, IKvPairSerializer& kv_pair_serializer)
+  const std::string &src_path, const std::string& client_ip,
+  int parallelism, int ops_timeout_msec, int connect_timeout_msec,
+  IKvPairSerializer& kv_pair_serializer)
   : src_path_(src_path), client_ip_(client_ip), parallelism_(parallelism)
+  , ops_timeout_msec_(ops_timeout_msec), connect_timeout_msec_(connect_timeout_msec)
 {
   producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
 }
@@ -87,8 +90,7 @@ RepStatus CheckpointProducer::CreateCheckpoint(
 // Kuaishou should create a new function for this request
 RepStatus CheckpointProducer::StartStreaming(
                           const StartStreamingRequest& req,
-                          StartStreamingResponse& res,
-                          uint64_t timeout_msec)
+                          StartStreamingResponse& res)
 {
   logger->Log(Severity::INFO, FormatString("StartStreaming: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
                 client_ip_.c_str(), req.checkpoint_id, req.consumer_port, req.max_num_of_threads));
@@ -106,7 +108,8 @@ RepStatus CheckpointProducer::StartStreaming(
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
-                              parallelism_, timeout_msec, done_cb);
+                                  parallelism_, ops_timeout_msec_, connect_timeout_msec_,
+                                  done_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
     return rc;
@@ -192,12 +195,18 @@ void CheckpointProducer::ReplicationDone(ProducerState state, const std::string&
   producer_state_cv_.notify_all();
 }
 
-RepStatus ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const std::string& client_ip,
-                        int parallelism, uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer)
+RepStatus ProvideCheckpoint(RpcChannel& rpc,
+                            const std::string& src_path,
+                            const std::string& client_ip,
+                            int parallelism, 
+                            int ops_timeout_msec,
+                            int connect_timeout_msec,
+                            IKvPairSerializer& kv_pair_serializer)
 {
   using namespace std::placeholders;
 
-  CheckpointProducer cp(src_path, client_ip, parallelism, kv_pair_serializer);
+  CheckpointProducer cp(src_path, client_ip,
+                        parallelism, ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
     create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
@@ -208,7 +217,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const 
   }
 
   std::function<RepStatus(const StartStreamingRequest&, StartStreamingResponse&)>
-    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2, timeout_msec); 
+    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
   rc = rpc.ProcessCommand(start_streaming_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::StartStreaming failed\n"));

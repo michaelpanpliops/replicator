@@ -26,7 +26,8 @@ struct Statistics {
 
 class Consumer {
 public:
-  explicit Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer);
+  explicit Consumer(uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
+                    IKvPairSerializer& kv_pair_serializer);
   virtual ~Consumer();
   RepStatus Start(const std::string& replica_path, uint16_t& port,
             std::function<void(ConsumerState, const std::string&)>& done_callback);
@@ -60,6 +61,8 @@ private:
 
   // Signal threads to exit
   std::atomic<bool> kill_;
+  uint32_t ops_timeout_msec_;
+  uint32_t connect_timeout_msec_;
 
   // Worker threads
   void WriterThread();
@@ -74,9 +77,6 @@ private:
   std::string error_;
   std::mutex state_mutex_;
   void SetState(const ConsumerState& state, const std::string& error);
-
-  // Operating timeout
-  uint64_t timeout_msec_;
 };
 
 }

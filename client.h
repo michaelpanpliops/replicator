@@ -12,17 +12,19 @@
 
 
 RepStatus ReplicateCheckpoint(RpcChannel& rpc,
-                        int32_t shard,
-                        const std::string &dst_path,
-                        int32_t desired_num_of_threads,
-                        uint64_t timeout_msec,
-                        IKvPairSerializer& kv_pair_serializer);
+                              int32_t shard,
+                              const std::string &dst_path,
+                              int desired_num_of_threads,
+                              int ops_timeout_msec,
+                              int connect_timeout_msec,
+                              IKvPairSerializer& kv_pair_serializer);
 RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done);
 
 class CheckpointConsumer
 {
 public:
-  CheckpointConsumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer);
+  CheckpointConsumer(int ops_timeout_msec, int connect_timeout_msec,
+                    IKvPairSerializer& kv_pair_serializer);
   ~CheckpointConsumer() {}
 
   // Accessors

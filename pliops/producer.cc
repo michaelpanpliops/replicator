@@ -100,7 +100,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
       auto current_time = std::chrono::steady_clock::now();
       auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
       
-      if (elapsed_time.count() >= timeout_msec_) {
+      if (elapsed_time.count() >= ops_timeout_msec_) {
         // We must release the iterator here, otherwise DB::Close will crash
         status = iterator->Close();
         delete iterator;
@@ -147,7 +147,7 @@ void Producer::CommunicationThread() {
   std::string key, value;
   while(!kill_) {
     std::pair<std::string, std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
       SetState(ProducerState::ERROR, "");
       return;
@@ -212,11 +212,13 @@ RepStatus Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::v
 }
 
 RepStatus Producer::Start(const std::string& ip, uint16_t port,
-                    uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
+                    uint32_t max_num_of_threads, uint32_t parallelism,
+                    uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
                     std::function<void(ProducerState, const std::string&)>& done_callback)
 {
   done_callback_ = done_callback;
-  timeout_msec_ = timeout_msec;
+  ops_timeout_msec_ = ops_timeout_msec;
+  connect_timeout_msec_ = connect_timeout_msec;
 
   // Move state into IN_PROGRESS
   assert(state_ == ProducerState::IDLE);
@@ -233,7 +235,7 @@ RepStatus Producer::Start(const std::string& ip, uint16_t port,
   // Connect to consumer
   logger->Log(Severity::INFO, "Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
+  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, connect_timeout_msec_);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, "Socket connect failed\n");
     return rc;
