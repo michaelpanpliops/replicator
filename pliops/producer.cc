@@ -94,27 +94,14 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     key = iterator->key();
     value = iterator->value();
 
-    std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-    bool enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});
-    while (!enqueued && !kill_) {
-      auto current_time = std::chrono::steady_clock::now();
-      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
-      
-      if (elapsed_time.count() >= timeout_msec_) {
-        // We must release the iterator here, otherwise DB::Close will crash
-        status = iterator->Close();
-        delete iterator;
+    if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, timeout_msec_)) {
+      // We must release the iterator here, otherwise DB::Close will crash
+      status = iterator->Close();
+      delete iterator;
 
-        logger->Log(LogLevel::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-        SetState(ProducerState::ERROR, "");
-        return;
-      }
-
-      // Server side is not fast enough, message queue is full. re-attempt enqueueing to shard's message queue in a short bit.
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-      std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-      enqueued = message_queue_->try_enqueue({std::string(key.data(), key.size()), std::string(value.data(), value.size())});      
+      logger->Log(LogLevel::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
+      SetState(ProducerState::ERROR, "");
+      return;
     }
 
     total_number_of_operations++;
@@ -136,9 +123,10 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   // The following code must be under lock to ensure atomicity
   std::lock_guard<std::mutex> lock(active_reader_threads_mutex_);
   active_reader_threads_count_--;
-  if (active_reader_threads_count_ == 0) {
-    // The last active thread signals end of communications
-    message_queue_->enqueue({"", ""}); 
+  // The last active thread signals end of communications
+  if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_)) {
+      logger->Log(LogLevel::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
+      SetState(ProducerState::ERROR, "");
   }
 }
 
@@ -276,7 +264,10 @@ void Producer::StopImpl()
 
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
-  message_queue_->enqueue({"", ""});
+  if (!EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_) ) {
+      logger->Log(LogLevel::ERROR, FormatString("enqueue failed, reason: timeout\n"));
+      SetState(ProducerState::ERROR, "");
+  }
   communication_thread_->join();
   connection_.reset();
   message_queue_.reset();
@@ -338,6 +329,28 @@ void Producer::SetState(const ProducerState& state, const std::string& error)
   if (IsFinalState(state_)) {
     done_callback_(state_, error_);
   }
+}
+
+bool Producer::EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
+                   std::pair<std::string, std::string>&& message,
+                   std::atomic<bool>& kill,
+                   uint64_t timeout_msec) {
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+  bool enqueued = false;
+  while (!enqueued && !kill) {
+    enqueued = message_queue->try_enqueue(message);
+
+    if (!enqueued) {
+      auto current_time = std::chrono::steady_clock::now();
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
+
+      if (elapsed_time.count() >= timeout_msec) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }  
+  }
+  return enqueued;
 }
 
 }

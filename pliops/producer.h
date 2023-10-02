@@ -84,6 +84,12 @@ private:
   std::string error_;
   std::mutex state_mutex_;
   void SetState(const ProducerState& state, const std::string& error);
+
+  // Enqueue limit timeout
+  bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
+                     std::pair<std::string, std::string>&& message,
+                     std::atomic<bool>& kill,
+                     uint64_t timeout_msec);
 };
 
 }
