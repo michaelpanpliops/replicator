@@ -94,8 +94,6 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     key = iterator->key();
     value = iterator->value();
 
-    iterator->Next();
-
     if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, timeout_msec_)) {
       // We must release the iterator here, otherwise DB::Close will crash
       status = iterator->Close();
@@ -109,6 +107,8 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     total_number_of_operations++;
     statistics_.num_kv_pairs++; // atomic
     statistics_.num_bytes.fetch_add(key.size() + value.size()); // atomic
+
+    iterator->Next();
   }
   logger->Log(LogLevel::INFO, FormatString("Reader thread #%d ended. Performed %lld operations.\n", thread_id, total_number_of_operations));
 

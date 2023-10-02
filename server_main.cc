@@ -64,6 +64,7 @@ int main(int argc, char* argv[]) {
   std::string client_ip;
   uint64_t timeout_msec = 50000; // default timeout
   ParseArgs(argc, argv, parallelism, src_path, client_ip, timeout_msec);
+  logger.reset(new SimpleLogger());
 
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
   KvPairSimpleSerializer kv_pair_serializer;
