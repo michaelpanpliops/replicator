@@ -32,6 +32,12 @@ std::string Status::ToString() const {
     case Code::DB_FAILURE:
         code_str = "DB_FAILRE";
         break;
+    case Code::NETWORK_FAILURE:
+        code_str = "NETWORK_FAILURE";
+        break;
+    case Code::REPLICATOR_FAILURE:
+        code_str = "REPLICATOR_FAILURE";
+        break;
     default:
         code_str = "UNKNOWN";
         break;

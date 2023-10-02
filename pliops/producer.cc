@@ -56,7 +56,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   auto status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
-    SetState(ProducerState::ERROR, "");
+    SetState(ProducerState::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
     return;
   }
 
@@ -67,7 +67,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
     logger->Log(Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
-    SetState(ProducerState::ERROR, "");
+    SetState(ProducerState::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
     return;
   }
 
@@ -106,7 +106,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
         delete iterator;
 
         logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-        SetState(ProducerState::ERROR, "");
+        SetState(ProducerState::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
         return;
       }
 
@@ -130,7 +130,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   delete iterator;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
-    SetState(ProducerState::ERROR, "");
+    SetState(ProducerState::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
   }
 
   // The following code must be under lock to ensure atomicity
@@ -149,13 +149,13 @@ void Producer::CommunicationThread() {
     std::pair<std::string, std::string> message;
     if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
-      SetState(ProducerState::ERROR, "");
+      SetState(ProducerState::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
       return;
     }
     auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size(), kv_pair_serializer_);
     if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: connection_->Send failed\n"));
-      SetState(ProducerState::ERROR, "");
+      SetState(ProducerState::ERROR, FormatString("Communication thread: connection_->Send failed\n"));
       return;
     }
     // Poison pill, all readers finished their work
@@ -166,7 +166,7 @@ void Producer::CommunicationThread() {
       shard_ = nullptr;
       if (!status.ok()) {
         logger->Log(Severity::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
-        SetState(ProducerState::ERROR, "");
+        SetState(ProducerState::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
         return;
       }
 
@@ -277,7 +277,7 @@ void Producer::StopImpl()
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
   message_queue_->enqueue({"", ""});
-  communication_thread_->join();
+  if (communication_thread_) communication_thread_->join();
   connection_.reset();
   message_queue_.reset();
 
@@ -299,9 +299,9 @@ RepStatus Producer::Stop()
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Producer::StopImpl, this);
   if (future->wait_for(10s) == std::future_status::timeout) {
-    logger->Log(Severity::ERROR, "Stop failed, some threads are stuck.\n");
+    logger->Log(Severity::FATAL, "Stop failed, some threads are stuck.\n");
     // If the app will try destroy the Producer object, it will crash
-    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "Stop failed, some threads are stuck.\n");
+    return RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, "Stop failed, some threads are stuck.\n");
   } else {
     delete future;
   }

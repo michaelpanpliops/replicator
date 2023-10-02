@@ -77,6 +77,7 @@ int main(int argc, char* argv[]) {
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout_msec, kv_pair_serializer);
   if (!rc.IsOk()) {
+    Cleanup();
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     exit(1);
   }
@@ -86,6 +87,7 @@ int main(int argc, char* argv[]) {
     std::this_thread::sleep_for(10s);
     rc = CheckReplicationStatus(rpc, done);
     if (!rc.IsOk()) {
+      Cleanup();
       logger->Log(Severity::ERROR, FormatString("CheckReplicationStatus failed\n"));
       exit(1);
     }

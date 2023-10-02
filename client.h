@@ -18,6 +18,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc,
                         uint64_t timeout_msec,
                         IKvPairSerializer& kv_pair_serializer);
 RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done);
+void Cleanup();
 
 class CheckpointConsumer
 {

@@ -7,7 +7,8 @@ enum class Severity {
     DEBUG = 0,
     INFO = 1,
     WARNING = 2,
-    ERROR
+    ERROR = 3,
+    FATAL
 };
 
 namespace Replicator {

@@ -211,7 +211,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     auto wait_rc = consumer_->WaitForCompletion(50000);
     if (!wait_rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
-      // return -1; - do not stop here, try to cleanup
+      return rc;
     }
 
     rc = consumer_->ConsumerImpl().Stop();
@@ -221,9 +221,16 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     }
     consumer_.reset();
     done = true;
-    return wait_rc.IsOk() ? RepStatus() : rc;
+    return wait_rc.IsOk() ? rc : wait_rc;
   }
 #endif
 
   return RepStatus();
+}
+
+void Cleanup() {
+  if (consumer_) {
+    auto rc = consumer_->ConsumerImpl().Stop();
+    consumer_.reset();
+  }
 }

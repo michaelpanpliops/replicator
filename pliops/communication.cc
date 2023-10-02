@@ -34,6 +34,7 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t
                           MSG_NOSIGNAL);
     if (bytes_sent == 0 && errno == 0) {
       // Connection closed by other party (EOF).
+      logger->Log(Severity::ERROR, FormatString("Connection closed by other party (EOF).\n"));
       return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "Connection closed by other party (EOF).\n");
     } else if (bytes_sent < 0) {
       logger->Log(Severity::ERROR, FormatString("Failed to send message size: %d\n", errno));
@@ -249,7 +250,7 @@ RepStatus Connect(const std::string& destination_ip, const uint32_t destination_
       logger->Log(Severity::ERROR, FormatString("Failed connecting socket: %d\n", errno));
     }
     close(sockfd);
-    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Illegal server address: %d\n", errno));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Failed connecting socket: %d\n", errno));
   }
 
   connection.reset(new Connection<ConnectionType::TCP_SOCKET>(sockfd));

@@ -109,6 +109,7 @@ RepStatus CheckpointProducer::StartStreaming(
                               parallelism_, timeout_msec, done_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
@@ -125,6 +126,7 @@ RepStatus CheckpointProducer::GetStatus(
   // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
+    DestroyCheckpoint();
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id\n"));
   }
 
@@ -132,6 +134,7 @@ RepStatus CheckpointProducer::GetStatus(
   auto rc = producer_->GetStats(res.num_kv_pairs, res.num_bytes);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stats failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
@@ -140,6 +143,7 @@ RepStatus CheckpointProducer::GetStatus(
   rc = producer_->GetState(res.state, error);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::State failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
@@ -221,6 +225,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const 
     rc = rpc.ProcessCommand(get_status_cb);
     if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::GetStatus failed\n"));
+      cp.DestroyCheckpoint();
       return rc;
     }
   }
