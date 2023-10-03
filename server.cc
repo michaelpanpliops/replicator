@@ -101,8 +101,8 @@ RepStatus CheckpointProducer::StartStreaming(
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ProducerState, const std::string&)> done_cb =
-    std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
+  std::function<void(ProducerState)> done_cb =
+    std::bind(&CheckpointProducer::ReplicationDone, this, _1); 
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
@@ -126,7 +126,6 @@ RepStatus CheckpointProducer::GetStatus(
   // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
-    DestroyCheckpoint();
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id\n"));
   }
 
@@ -139,8 +138,7 @@ RepStatus CheckpointProducer::GetStatus(
   }
 
   // Get producer state
-  std::string error;
-  rc = producer_->GetState(res.state, error);
+  rc = producer_->GetState(res.state);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::State failed\n"));
     DestroyCheckpoint();
@@ -185,14 +183,13 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   return RepStatus();
 }
 
-void CheckpointProducer::ReplicationDone(ProducerState state, const std::string& error)
+void CheckpointProducer::ReplicationDone(ProducerState state)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
   std::lock_guard<std::mutex> lock(producer_state_mutex_);
-  logger->Log(Severity::INFO, FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
+  logger->Log(Severity::INFO, FormatString("ReplicationDone callback: %s\n", ToString(state)));
   producer_state_ = state;
-  producer_error_ = error;
   producer_state_cv_.notify_all();
 }
 
@@ -225,7 +222,6 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const 
     rc = rpc.ProcessCommand(get_status_cb);
     if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::GetStatus failed\n"));
-      cp.DestroyCheckpoint();
       return rc;
     }
   }
@@ -233,7 +229,6 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc, const std::string& src_path, const 
   auto wait_rc = cp.WaitForCompletion(1000);
   if (!wait_rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
-     // return -1; - do not stop here, try to cleanup
   }
 
   rc = cp.DestroyCheckpoint();

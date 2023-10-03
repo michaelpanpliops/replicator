@@ -29,7 +29,7 @@ void Consumer::WriterThread() {
     std::pair<std::string,std::string> message;
     if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, "Writer thread: Failed to dequeue message, reason: timeout\n");
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Writer thread: Failed to dequeue message, reason: timeout\n"));
       return;
     }
     std::string& key = message.first;
@@ -45,7 +45,7 @@ void Consumer::WriterThread() {
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
-      SetState(ConsumerState::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString())));
       return;
     }
 
@@ -59,7 +59,7 @@ void Consumer::WriterThread() {
   shard_ = nullptr;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString()));
-    SetState(ConsumerState::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString()));
+    SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString())));
     return;
   }
 
@@ -71,7 +71,7 @@ void Consumer::WriterThread() {
   logger->Log(Severity::INFO, FormatString("%.1f pairs/sec\n", statistics_.num_kv_pairs.load()/(double)elapsed_seconds.count()));
   logger->Log(Severity::INFO, FormatString("%.1f bytes/sec\n", statistics_.num_bytes.load()/(double)elapsed_seconds.count()));
 
-  SetState(ConsumerState::DONE, "");
+  SetState(ConsumerState::DONE, RepStatus());
 
   logger->Log(Severity::INFO, FormatString("Writer thread ended\n"));
 }
@@ -83,7 +83,7 @@ void Consumer::CommunicationThread()
   auto rc = Accept(*connection_, connection, timeout_msec_);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-    SetState(ConsumerState::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
+    SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
     return;
   }
 
@@ -92,12 +92,12 @@ void Consumer::CommunicationThread()
     rc = connection->Receive(key, value, kv_pair_serializer_);
     if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-      SetState(ConsumerState::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
       return;
     }
     if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n")));
       return;
     }
     if (key.empty()) {
@@ -140,7 +140,7 @@ RepStatus Consumer::OpenReplica(const std::string& replica_path)
 }
 
 RepStatus Consumer::Start(const std::string& replica_path, uint16_t& port,
-                    std::function<void(ConsumerState, const std::string&)>& done_callback)
+                    std::function<void(ConsumerState)>& done_callback)
 {
   done_callback_ = done_callback;
 
@@ -205,7 +205,7 @@ RepStatus Consumer::Stop()
   using namespace std::literals;
 
   // Move state into STOPPED, so we won't get any ERROR/DONE notifications from now
-  SetState(ConsumerState::STOPPED, "");
+  SetState(ConsumerState::STOPPED, RepStatus());
 
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Consumer::StopImpl, this);
@@ -221,12 +221,11 @@ RepStatus Consumer::Stop()
   return RepStatus();
 }
 
-RepStatus Consumer::GetState(ConsumerState& state, std::string& error)
+RepStatus Consumer::GetState(ConsumerState& state)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   state = state_;
-  error = error_;
-  return RepStatus();
+  return rc_;
 }
 
 RepStatus Consumer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
@@ -236,7 +235,7 @@ RepStatus Consumer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
   return RepStatus();
 }
 
-void Consumer::SetState(const ConsumerState& state, const std::string& error)
+void Consumer::SetState(const ConsumerState& state, const RepStatus& rc)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   // Never overwrite a state if it is already in a final state
@@ -244,10 +243,10 @@ void Consumer::SetState(const ConsumerState& state, const std::string& error)
     return;
   }
   state_ = state;
-  error_ = error;
+  rc_ = rc;
   // Call the callback for final states only
   if (IsFinalState(state_)) {
-    done_callback_(state_, error_);
+    done_callback_(state_);
   }
 }
 

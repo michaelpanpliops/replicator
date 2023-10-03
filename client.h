@@ -30,7 +30,7 @@ public:
   Replicator::Consumer& ConsumerImpl() { return *replication_consumer_; }
 
   // Synchronization and cleanup
-  void ReplicationDone(ConsumerState state, const std::string& error);
+  void ReplicationDone(ConsumerState state);
   RepStatus WaitForCompletion(uint32_t timeout_msec);
 
 private:

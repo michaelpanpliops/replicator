@@ -8,7 +8,7 @@ enum class Severity {
     INFO = 1,
     WARNING = 2,
     ERROR = 3,
-    FATAL
+    FATAL = 4
 };
 
 namespace Replicator {
@@ -37,6 +37,23 @@ namespace {
 
   bool IsFinalState(const State& s) { return (s >= State::DONE); }
   uint64_t msec_to_usec(uint64_t msec) { return msec * 1000; }
+
+  std::string SeverityToString(Severity severity) {
+    switch (severity) {
+      case Severity::DEBUG:
+        return "DEBUG";
+      case Severity::INFO:
+        return "INFO";
+      case Severity::WARNING:
+        return "WARNING";
+      case Severity::ERROR:
+        return "ERROR";
+      case Severity::FATAL:
+        return "FATAL";
+      default:
+        return "UNKNOWN";
+    }
+  }
 }
 
 }
