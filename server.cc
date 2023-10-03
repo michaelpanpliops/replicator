@@ -188,7 +188,11 @@ void CheckpointProducer::ReplicationDone(ProducerState state)
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
   std::lock_guard<std::mutex> lock(producer_state_mutex_);
-  logger->Log(Severity::INFO, FormatString("ReplicationDone callback: %s\n", ToString(state)));
+  auto severity = Severity::INFO;
+  if (state == ProducerState::ERROR) {
+    severity = Severity::ERROR;
+  }
+  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
   producer_state_ = state;
   producer_state_cv_.notify_all();
 }
