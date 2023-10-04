@@ -18,7 +18,7 @@ CheckpointConsumer::CheckpointConsumer(int ops_timeout_msec, int connect_timeout
     std::make_unique<Replicator::Consumer>(ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 }
 
-void CheckpointConsumer::ReplicationDone(ConsumerState state)
+void CheckpointConsumer::ReplicationDone(ConsumerState state, const RepStatus& status)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
@@ -27,8 +27,9 @@ void CheckpointConsumer::ReplicationDone(ConsumerState state)
   if (state == ConsumerState::ERROR) {
     severity = Severity::ERROR;
   }
-  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
+  logger->Log(severity, FormatString("ReplicationDone callback: %s, %s\n", ToString(state), status.ToString()));
   consumer_state_ = state;
+  consumer_status_ = status;
   consumer_state_cv_.notify_all();
 }
 
@@ -129,8 +130,8 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ConsumerState)> done_cb =
-    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1); 
+  std::function<void(ConsumerState, const RepStatus&)> done_cb =
+    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1, _2); 
 
   // Start consumer and get the port number from it
   uint16_t port;
@@ -163,7 +164,8 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
 
   // Get the state from the consumer
   ConsumerState consumer_state;
-  auto rc = consumer_->ConsumerImpl().GetState(consumer_state);
+  RepStatus consumer_status;
+  auto rc = consumer_->ConsumerImpl().GetState(consumer_state, consumer_status);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::GetState failed\n"));
     return rc;

@@ -125,8 +125,8 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   active_reader_threads_count_--;
   // The last active thread signals end of communications
   if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, ops_timeout_msec_)) {
-      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-      SetState(ProducerState::ERROR, RepStatus());
+    logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
+    SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
   }
 }
 
@@ -202,7 +202,7 @@ RepStatus Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::v
 RepStatus Producer::Start(const std::string& ip, uint16_t port,
                     uint32_t max_num_of_threads, uint32_t parallelism,
                     uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
-                    std::function<void(ProducerState)>& done_callback)
+                    std::function<void(ProducerState, const RepStatus&)>& done_callback)
 {
   done_callback_ = done_callback;
   ops_timeout_msec_ = ops_timeout_msec;
@@ -266,9 +266,9 @@ void Producer::StopImpl()
 
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
-  if (message_queue_ && !EnqueueTimed(message_queue_, {"",""}, kill_, ops_timeout_msec_) ) {
+  if (message_queue_ && !EnqueueTimed(message_queue_, {"",""}, false, ops_timeout_msec_) ) {
       logger->Log(Severity::ERROR, FormatString("enqueue failed, reason: timeout\n"));
-      SetState(ProducerState::ERROR, RepStatus());
+      SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
   }
   if (communication_thread_) communication_thread_->join();
   connection_.reset();
@@ -304,11 +304,12 @@ RepStatus Producer::Stop()
   return RepStatus();
 }
 
-RepStatus Producer::GetState(ProducerState& state)
+RepStatus Producer::GetState(ProducerState& state, RepStatus& status)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   state = state_;
-  return rc_;
+  status = status_;
+  return RepStatus();
 }
 
 RepStatus Producer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
@@ -318,7 +319,7 @@ RepStatus Producer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
   return RepStatus();
 }
 
-void Producer::SetState(const ProducerState& state, const RepStatus& rc)
+void Producer::SetState(const ProducerState& state, const RepStatus& status)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   // Never overwrite a state if it is already in a final state
@@ -326,16 +327,16 @@ void Producer::SetState(const ProducerState& state, const RepStatus& rc)
     return;
   }
   state_ = state;
-  rc_ = rc;
+  status_ = status;
   // Call the callback for final states only
   if (IsFinalState(state_)) {
-    done_callback_(state_);
+    done_callback_(state_, status_);
   }
 }
 
 bool Producer::EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
                    std::pair<std::string, std::string>&& message,
-                   std::atomic<bool>& kill,
+                   bool kill,
                    uint64_t timeout_msec) {
   std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
   bool enqueued = false;
