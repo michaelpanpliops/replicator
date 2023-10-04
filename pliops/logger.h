@@ -7,9 +7,9 @@
 
 class ILogger {
 public:
-    virtual ~ILogger() {}
+  virtual ~ILogger() {}
 
-    virtual void Log(Severity level, const std::string& message) = 0;
+  virtual void Log(Severity level, const std::string& message) = 0;
 };
 
 
