@@ -222,8 +222,8 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   if (IsFinalState(server_state) && !done) {
     // Wait for consumer to complete
     auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
-    auto wait_rc = consumer_->WaitForCompletion(timeout_msec);
-    if (!wait_rc.IsOk()) {
+    rc = consumer_->WaitForCompletion(timeout_msec);
+    if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       return rc;
     }
@@ -235,7 +235,6 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     }
     consumer_.reset();
     done = true;
-    return wait_rc.IsOk() ? rc : wait_rc;
   }
 #endif
 
