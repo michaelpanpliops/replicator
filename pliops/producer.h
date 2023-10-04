@@ -15,7 +15,6 @@
 namespace Replicator {
 
 using ProducerState = Replicator::State;
-using DBStatus = ROCKSDB_NAMESPACE::Status;
 using RepStatus = Replicator::Status;
 
 using RangeType = std::pair<std::optional<std::string>, std::optional<std::string>>;

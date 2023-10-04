@@ -6,27 +6,28 @@
 
 namespace {
 
-using namespace ROCKSDB_NAMESPACE;
-
-Status CalcKeyRanges(DB* db, ColumnFamilyHandle* column_family, size_t num_ranges,
-                          std::vector<std::string>& range_split_keys)
+ROCKSDB_NAMESPACE::Status CalcKeyRanges(
+                                    ROCKSDB_NAMESPACE::DB* db,
+                                    ROCKSDB_NAMESPACE::ColumnFamilyHandle* column_family,
+                                    size_t num_ranges,
+                                    std::vector<std::string>& range_split_keys)
 {
   if (num_ranges == 1 || num_ranges == 0) {
-    return Status();
+    return ROCKSDB_NAMESPACE::Status();
   }
 
-  ColumnFamilyDescriptor cf_desc;
-  Status s = column_family->GetDescriptor(&cf_desc);
+  ROCKSDB_NAMESPACE::ColumnFamilyDescriptor cf_desc;
+  ROCKSDB_NAMESPACE::Status s = column_family->GetDescriptor(&cf_desc);
   if (!s.ok()) {
     return s;
   }
 
-  ColumnFamilyMetaData cf_metadata;
+  ROCKSDB_NAMESPACE::ColumnFamilyMetaData cf_metadata;
   db->GetColumnFamilyMetaData(column_family, &cf_metadata);
   auto range_average_size = cf_metadata.size / num_ranges;
 
   std::vector<
-      std::pair<std::vector<SstFileMetaData>::const_iterator, size_t>> per_level_files;
+      std::pair<std::vector<ROCKSDB_NAMESPACE::SstFileMetaData>::const_iterator, size_t>> per_level_files;
 
   // Create vector of level iterators. Each level entry holds a pair of iterators -
   // the begin and the end iterators of the files vector (L0 files are excluded)
@@ -83,6 +84,6 @@ Status CalcKeyRanges(DB* db, ColumnFamilyHandle* column_family, size_t num_range
     range_split_keys.pop_back();
   }
 
-  return Status();
+  return ROCKSDB_NAMESPACE::Status();
 }
 }
