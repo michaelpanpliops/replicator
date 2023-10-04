@@ -53,6 +53,7 @@ RepStatus CheckpointProducer::CreateCheckpoint(
     logger->Log(Severity::ERROR, FormatString("DB::Open failed: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DB::Open failed: %s", s.ToString()));
   }
+  std::unique_ptr<ROCKSDB_NAMESPACE::DB> db_ptr(db); // guarantee db deletion
 
   // Create a checkpoint
   Checkpoint* checkpoint_creator = nullptr;
@@ -61,6 +62,8 @@ RepStatus CheckpointProducer::CreateCheckpoint(
     logger->Log(Severity::ERROR, FormatString("Error in Checkpoint::Create: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::Create: %s", s.ToString()));
   }
+  std::unique_ptr<ROCKSDB_NAMESPACE::Checkpoint> checkpoint_ptr(checkpoint_creator); // guarantee checkpoint deletion
+
   // The checkpoint must reside on the same partition with the database
   checkpoint_path_ = std::filesystem::path(src_path_)/(std::to_string(req.shard_number) + "_checkpoint");
   logger->Log(Severity::INFO, FormatString("Checkpoint path: %s\n", checkpoint_path_));
@@ -76,8 +79,8 @@ RepStatus CheckpointProducer::CreateCheckpoint(
     logger->Log(Severity::ERROR, FormatString("Error in DB close %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in DB close %s", s.ToString()));
   }
-  delete db;
-  delete checkpoint_creator;
+  db_ptr.reset();
+  checkpoint_ptr.reset();
 
   // Open the checkpoint
   checkpoint_id_ = GetUniqueCheckpointName();
@@ -243,7 +246,9 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
     }
   }
 
-  auto wait_rc = cp.WaitForCompletion(1000);
+  // Wait till the producer is done.
+  auto timeout_msec = std::max(cp.ops_timeout_msec_, cp.connect_timeout_msec_) + 1000;
+  auto wait_rc = cp.WaitForCompletion(timeout_msec);
   if (!wait_rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
   }

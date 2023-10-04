@@ -39,12 +39,13 @@ public:
   // The client_done_ is set to true after sending to the client ERROR, DONE, STOPPED
   bool IsClientDone() { return client_done_; };
 
+  const int ops_timeout_msec_;
+  const int connect_timeout_msec_;
+
 private:
   const std::string& src_path_;
   const std::string& client_ip_;
   const int parallelism_;
-  const int ops_timeout_msec_;
-  const int connect_timeout_msec_;
   uint32_t checkpoint_id_;
   std::string checkpoint_path_;
   bool client_done_ = false;

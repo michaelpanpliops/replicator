@@ -11,8 +11,11 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer(int ops_timeout_msec, int connect_timeout_msec,
-                                      IKvPairSerializer& kv_pair_serializer)
+CheckpointConsumer::CheckpointConsumer(
+  int ops_timeout_msec, int connect_timeout_msec,
+  IKvPairSerializer& kv_pair_serializer)
+  : ops_timeout_msec_(ops_timeout_msec)
+  , connect_timeout_msec_(connect_timeout_msec)
 {
   replication_consumer_ =
     std::make_unique<Replicator::Consumer>(ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
@@ -218,7 +221,8 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // Cleanup and return if the server it is done
   if (IsFinalState(server_state) && !done) {
     // Wait for consumer to complete
-    auto wait_rc = consumer_->WaitForCompletion(50000);
+    auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
+    auto wait_rc = consumer_->WaitForCompletion(timeout_msec);
     if (!wait_rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       return rc;

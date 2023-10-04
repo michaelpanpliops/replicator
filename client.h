@@ -35,6 +35,9 @@ public:
   void ReplicationDone(ConsumerState state, const RepStatus& status);
   RepStatus WaitForCompletion(uint32_t timeout_msec);
 
+  const int ops_timeout_msec_;
+  const int connect_timeout_msec_;
+
 private:
   // Consumer state and its error are updated in the ReplicationDone callback
   ConsumerState consumer_state_;
