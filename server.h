@@ -24,7 +24,7 @@ public:
   CheckpointProducer( const std::string& src_path, const std::string& client_ip,
                       int parallelism, int ops_timeout_msec, int connect_timeout_msec,
                       IKvPairSerializer& kv_pair_serializer);
-  ~CheckpointProducer() { DestroyCheckpoint(); }
+  ~CheckpointProducer();
 
   // Client requests processing methods
   RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);

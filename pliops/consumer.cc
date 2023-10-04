@@ -34,7 +34,7 @@ void Consumer::WriterThread() {
     std::pair<std::string,std::string> message;
     if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Writer thread: Failed to dequeue message, reason: timeout\n"));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Writer thread: Failed to dequeue message, reason: timeout"));
       return;
     }
     std::string& key = message.first;
@@ -50,7 +50,7 @@ void Consumer::WriterThread() {
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString())));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s", key, status.ToString())));
       return;
     }
 
@@ -64,7 +64,7 @@ void Consumer::WriterThread() {
   shard_ = nullptr;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString()));
-    SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString())));
+    SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s", status.ToString())));
     return;
   }
 
@@ -88,7 +88,7 @@ void Consumer::CommunicationThread()
   auto rc = Accept(*connection_, connection, connect_timeout_msec_);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-    SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
+    SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
     return;
   }
 
@@ -97,12 +97,12 @@ void Consumer::CommunicationThread()
     rc = connection->Receive(key, value, kv_pair_serializer_);
     if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
       return;
     }
     if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n")));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout")));
       return;
     }
     if (key.empty()) {

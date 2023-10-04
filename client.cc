@@ -44,7 +44,7 @@ RepStatus CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
     return consumer_state_ == ConsumerState::ERROR || consumer_state_ == ConsumerState::DONE;
   });
 
-  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.\n");
+  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
 }
 
 // Send checkpoint request to the server
@@ -120,7 +120,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
     auto s = DestroyDB(replica_path, Options());
     if (!s.ok()) {
       logger->Log(Severity::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
-      return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
+      return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed: %s", s.ToString()));
     }
   }
 
@@ -151,7 +151,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   if (server_status != ServerState::IN_PROGRESS) {
     logger->Log(Severity::ERROR, FormatString("Server responded with error to StartStreaming\n"));
-    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartStreaming\n"));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartStreaming"));
   }
 
   return RepStatus();

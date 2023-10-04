@@ -10,7 +10,7 @@
 
 
 void SimpleLogger::Log(Severity level, const std::string& message) {
-  std::unique_lock lock(message_lock);
+  std::unique_lock lock(log_lock);
   auto current_time = GetCurrentTimeString();
   auto severity = GetSeverity(level);
   std::cout << FormatString("[%s][%s]  %s", current_time, severity, message);
