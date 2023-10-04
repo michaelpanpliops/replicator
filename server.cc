@@ -101,15 +101,14 @@ RepStatus CheckpointProducer::StartStreaming(
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ProducerState)> done_cb =
-    std::bind(&CheckpointProducer::ReplicationDone, this, _1); 
+  std::function<void(ProducerState, const RepStatus&)> done_cb =
+    std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
                               parallelism_, timeout_msec, done_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
-    DestroyCheckpoint();
     return rc;
   }
 
@@ -133,20 +132,19 @@ RepStatus CheckpointProducer::GetStatus(
   auto rc = producer_->GetStats(res.num_kv_pairs, res.num_bytes);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stats failed\n"));
-    DestroyCheckpoint();
     return rc;
   }
 
   // Get producer state
-  rc = producer_->GetState(res.state);
+  RepStatus status;
+  rc = producer_->GetState(res.state, status);
   if (!rc.IsOk()) {
-    logger->Log(Severity::ERROR, FormatString("Producer::State failed\n"));
-    DestroyCheckpoint();
+    logger->Log(Severity::ERROR, FormatString("Producer::GetState failed\n"));
     return rc;
   }
 
   // Update the client_done_
-  client_done_ = (res.state == ProducerState::DONE || res.state == ProducerState::ERROR);
+  client_done_ = IsFinalState(res.state);
 
   return RepStatus();
 }
@@ -183,7 +181,7 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   return RepStatus();
 }
 
-void CheckpointProducer::ReplicationDone(ProducerState state)
+void CheckpointProducer::ReplicationDone(ProducerState state, const RepStatus& status)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
@@ -192,8 +190,9 @@ void CheckpointProducer::ReplicationDone(ProducerState state)
   if (state == ProducerState::ERROR) {
     severity = Severity::ERROR;
   }
-  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
+  logger->Log(severity, FormatString("ReplicationDone callback: %s, %s\n", ToString(state), status.ToString()));
   producer_state_ = state;
+  producer_status_ = status;
   producer_state_cv_.notify_all();
 }
 

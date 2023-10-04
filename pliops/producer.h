@@ -34,14 +34,14 @@ public:
   RepStatus OpenShard(const std::string& shard_path);
   RepStatus Start(const std::string& ip, uint16_t port,
             uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
-            std::function<void(ProducerState)>& done_callback);
+            std::function<void(ProducerState, const RepStatus&)>& done_callback);
   RepStatus Stop();
-  RepStatus GetState(ProducerState& state);
+  RepStatus GetState(ProducerState& state, RepStatus& status);
   RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
-  std::function<void(ProducerState)> done_callback_;
+  std::function<void(ProducerState, const RepStatus&)> done_callback_;
 
   // Shard connection and its connection thread
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;
@@ -84,9 +84,9 @@ private:
 
   // State and status
   ProducerState state_ = ProducerState::IDLE;
-  RepStatus rc_;
+  RepStatus status_;
   std::mutex state_mutex_;
-  void SetState(const ProducerState& state, const RepStatus& error);
+  void SetState(const ProducerState& state, const RepStatus& status);
 
   // Enqueue limit timeout
   bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,

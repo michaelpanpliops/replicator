@@ -29,11 +29,11 @@ public:
   RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup
-  void ReplicationDone(ProducerState state);
+  void ReplicationDone(ProducerState state, const RepStatus&);
   RepStatus WaitForCompletion(uint32_t timeout_msec);
   RepStatus DestroyCheckpoint();
 
-  // The client_done_ is set to true after sending client ERROR or DONE
+  // The client_done_ is set to true after sending to the client ERROR, DONE, STOPPED
   bool IsClientDone() { return client_done_; };
 
 private:
@@ -46,6 +46,7 @@ private:
 
   // Producer state is updated in the ReplicationDone callback
   ProducerState producer_state_;
+  RepStatus producer_status_;
   std::mutex producer_state_mutex_;
   std::condition_variable producer_state_cv_;
 

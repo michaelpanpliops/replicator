@@ -140,7 +140,7 @@ RepStatus Consumer::OpenReplica(const std::string& replica_path)
 }
 
 RepStatus Consumer::Start(const std::string& replica_path, uint16_t& port,
-                    std::function<void(ConsumerState)>& done_callback)
+                    std::function<void(ConsumerState, const RepStatus&)>& done_callback)
 {
   done_callback_ = done_callback;
 
@@ -221,11 +221,12 @@ RepStatus Consumer::Stop()
   return RepStatus();
 }
 
-RepStatus Consumer::GetState(ConsumerState& state)
+RepStatus Consumer::GetState(ConsumerState& state, RepStatus& status)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   state = state_;
-  return rc_;
+  status = status_;
+  return RepStatus();
 }
 
 RepStatus Consumer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
@@ -235,7 +236,7 @@ RepStatus Consumer::GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes)
   return RepStatus();
 }
 
-void Consumer::SetState(const ConsumerState& state, const RepStatus& rc)
+void Consumer::SetState(const ConsumerState& state, const RepStatus& status)
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   // Never overwrite a state if it is already in a final state
@@ -243,10 +244,10 @@ void Consumer::SetState(const ConsumerState& state, const RepStatus& rc)
     return;
   }
   state_ = state;
-  rc_ = rc;
+  status_ = status;
   // Call the callback for final states only
   if (IsFinalState(state_)) {
-    done_callback_(state_);
+    done_callback_(state_, status_);
   }
 }
 
