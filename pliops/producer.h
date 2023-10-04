@@ -93,7 +93,7 @@ private:
   // Enqueue limit timeout
   bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
                      std::pair<std::string, std::string>&& message,
-                     bool kill,
+                     std::atomic<bool>& kill,
                      uint64_t timeout_msec);
 };
 
