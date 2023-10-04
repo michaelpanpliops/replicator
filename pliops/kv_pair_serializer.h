@@ -1,5 +1,4 @@
-#ifndef KV_PAIR_SERIALIZER_H
-#define KV_PAIR_SERIALIZER_H
+#pragma once
 
 namespace Replicator {
 
@@ -14,4 +13,3 @@ public:
 
 }
 
-#endif // KV_PAIR_SERIALIZER_H

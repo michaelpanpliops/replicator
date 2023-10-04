@@ -1,5 +1,4 @@
-#ifndef LOGGER_H
-#define LOGGER_H
+#pragma once
 
 #include <string>
 #include <memory>
@@ -15,6 +14,3 @@ public:
 
 
 extern std::unique_ptr<ILogger> logger;
-
-
-#endif // LOGGER_H

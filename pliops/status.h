@@ -1,6 +1,4 @@
 #pragma once
-#ifndef STATUS_H
-#define STATUS_H
 
 #include <string>
 
@@ -49,4 +47,3 @@ public:
 
 
 }
-#endif  // STATUS_H

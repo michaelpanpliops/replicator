@@ -1,5 +1,4 @@
-#ifndef SIMPLE_LOGGER_H
-#define SIMPLE_LOGGER_H
+#pragma once
 
 #include <mutex>
 
@@ -14,6 +13,3 @@ class SimpleLogger : public ILogger {
   std::string GetCurrentTimeString();
   std::string GetSeverity(Severity level);
 };
-
-
-#endif // SIMPLE_LOGGER_H
