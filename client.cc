@@ -9,14 +9,17 @@ std::unique_ptr<CheckpointConsumer> consumer_;
 uint32_t checkpoint_id_ = 0; // the id received from the server
 }
 
-CheckpointConsumer::CheckpointConsumer(int ops_timeout_msec, int connect_timeout_msec,
-                                      IKvPairSerializer& kv_pair_serializer)
+CheckpointConsumer::CheckpointConsumer(
+  int ops_timeout_msec, int connect_timeout_msec,
+  IKvPairSerializer& kv_pair_serializer)
+  : ops_timeout_msec_(ops_timeout_msec)
+  , connect_timeout_msec_(connect_timeout_msec)
 {
   replication_consumer_ =
     std::make_unique<Replicator::Consumer>(ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 }
 
-void CheckpointConsumer::ReplicationDone(ConsumerState state)
+void CheckpointConsumer::ReplicationDone(ConsumerState state, const RepStatus& status)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
@@ -25,8 +28,9 @@ void CheckpointConsumer::ReplicationDone(ConsumerState state)
   if (state == ConsumerState::ERROR) {
     severity = Severity::ERROR;
   }
-  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
+  logger->Log(severity, FormatString("ReplicationDone callback: %s, %s\n", ToString(state), status.ToString()));
   consumer_state_ = state;
+  consumer_status_ = status;
   consumer_state_cv_.notify_all();
 }
 
@@ -41,7 +45,7 @@ RepStatus CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
     return consumer_state_ == ConsumerState::ERROR || consumer_state_ == ConsumerState::DONE;
   });
 
-  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.\n");
+  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
 }
 
 // Send checkpoint request to the server
@@ -117,7 +121,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
     auto s = ROCKSDB_NAMESPACE::DestroyDB(replica_path, ROCKSDB_NAMESPACE::Options());
     if (!s.ok()) {
       logger->Log(Severity::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
-      return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
+      return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed: %s", s.ToString()));
     }
   }
 
@@ -127,8 +131,8 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ConsumerState)> done_cb =
-    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1); 
+  std::function<void(ConsumerState, const RepStatus&)> done_cb =
+    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1, _2); 
 
   // Start consumer and get the port number from it
   uint16_t port;
@@ -148,7 +152,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   if (server_status != ServerState::IN_PROGRESS) {
     logger->Log(Severity::ERROR, FormatString("Server responded with error to StartStreaming\n"));
-    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartStreaming\n"));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartStreaming"));
   }
 
   return RepStatus();
@@ -161,7 +165,8 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
 
   // Get the state from the consumer
   ConsumerState consumer_state;
-  auto rc = consumer_->ConsumerImpl().GetState(consumer_state);
+  RepStatus consumer_status;
+  auto rc = consumer_->ConsumerImpl().GetState(consumer_state, consumer_status);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::GetState failed\n"));
     return rc;
@@ -214,8 +219,9 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // Cleanup and return if the server it is done
   if (IsFinalState(server_state) && !done) {
     // Wait for consumer to complete
-    auto wait_rc = consumer_->WaitForCompletion(50000);
-    if (!wait_rc.IsOk()) {
+    auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
+    rc = consumer_->WaitForCompletion(timeout_msec);
+    if (!rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       return rc;
     }
@@ -227,7 +233,6 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     }
     consumer_.reset();
     done = true;
-    return wait_rc.IsOk() ? rc : wait_rc;
   }
 #endif
 

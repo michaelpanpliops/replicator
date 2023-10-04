@@ -21,6 +21,11 @@ CheckpointProducer::CheckpointProducer(
   producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
 }
 
+CheckpointProducer::~CheckpointProducer()
+{
+  DestroyCheckpoint();
+}
+
 // Process create-checkpoint request
 // Kuaishou function: SyncServiceImpl::RequireCheckpoint(...)
 RepStatus CheckpointProducer::CreateCheckpoint(
@@ -46,33 +51,36 @@ RepStatus CheckpointProducer::CreateCheckpoint(
   auto s = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("DB::Open failed: %s\n", s.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DB::Open failed: %s\n", s.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DB::Open failed: %s", s.ToString()));
   }
+  std::unique_ptr<ROCKSDB_NAMESPACE::DB> db_ptr(db); // guarantee db deletion
 
   // Create a checkpoint
   ROCKSDB_NAMESPACE::Checkpoint* checkpoint_creator = nullptr;
   s = ROCKSDB_NAMESPACE::Checkpoint::Create(db, &checkpoint_creator);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("Error in Checkpoint::Create: %s\n", s.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::Create: %s\n", s.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::Create: %s", s.ToString()));
   }
+  std::unique_ptr<ROCKSDB_NAMESPACE::Checkpoint> checkpoint_ptr(checkpoint_creator); // guarantee checkpoint deletion
+
   // The checkpoint must reside on the same partition with the database
   checkpoint_path_ = std::filesystem::path(src_path_)/(std::to_string(req.shard_number) + "_checkpoint");
   logger->Log(Severity::INFO, FormatString("Checkpoint path: %s\n", checkpoint_path_));
   s = checkpoint_creator->CreateCheckpoint(checkpoint_path_);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("Error in Checkpoint::CreateCheckpoint: %s\n", s.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::CreateCheckpoint: %s\n", s.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::CreateCheckpoint: %s", s.ToString()));
   }
 
   // Close the original DB, we don't need it anymore
   s = db->Close();
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("Error in DB close %s\n", s.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in DB close %s\n", s.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in DB close %s", s.ToString()));
   }
-  delete db;
-  delete checkpoint_creator;
+  db_ptr.reset();
+  checkpoint_ptr.reset();
 
   // Open the checkpoint
   checkpoint_id_ = GetUniqueCheckpointName();
@@ -98,13 +106,13 @@ RepStatus CheckpointProducer::StartStreaming(
   // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
-    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id\n"));
+    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
   }
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ProducerState)> done_cb =
-    std::bind(&CheckpointProducer::ReplicationDone, this, _1); 
+  std::function<void(ProducerState, const RepStatus&)> done_cb =
+    std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
@@ -112,7 +120,6 @@ RepStatus CheckpointProducer::StartStreaming(
                                   done_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
-    DestroyCheckpoint();
     return rc;
   }
 
@@ -129,27 +136,26 @@ RepStatus CheckpointProducer::GetStatus(
   // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id\n"));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
   }
 
   // Get producer statistics
   auto rc = producer_->GetStats(res.num_kv_pairs, res.num_bytes);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stats failed\n"));
-    DestroyCheckpoint();
     return rc;
   }
 
   // Get producer state
-  rc = producer_->GetState(res.state);
+  RepStatus status;
+  rc = producer_->GetState(res.state, status);
   if (!rc.IsOk()) {
-    logger->Log(Severity::ERROR, FormatString("Producer::State failed\n"));
-    DestroyCheckpoint();
+    logger->Log(Severity::ERROR, FormatString("Producer::GetState failed\n"));
     return rc;
   }
 
   // Update the client_done_
-  client_done_ = (res.state == ProducerState::DONE || res.state == ProducerState::ERROR);
+  client_done_ = IsFinalState(res.state);
 
   return RepStatus();
 }
@@ -165,7 +171,7 @@ RepStatus CheckpointProducer::WaitForCompletion(uint32_t timeout_msec)
     return producer_state_ == ProducerState::ERROR || producer_state_ == ProducerState::DONE;
   });
 
-  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.\n");
+  return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
 }
 
 RepStatus CheckpointProducer::DestroyCheckpoint() {
@@ -180,13 +186,13 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   auto s = ROCKSDB_NAMESPACE::DestroyDB(checkpoint_path_, ROCKSDB_NAMESPACE::Options());
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("DestroyDB failed to destroy checkpoint: %s\n", s.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed to destroy checkpoint: %s\n", s.ToString()));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed to destroy checkpoint: %s", s.ToString()));
   }
 
   return RepStatus();
 }
 
-void CheckpointProducer::ReplicationDone(ProducerState state)
+void CheckpointProducer::ReplicationDone(ProducerState state, const RepStatus& status)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
@@ -195,8 +201,9 @@ void CheckpointProducer::ReplicationDone(ProducerState state)
   if (state == ProducerState::ERROR) {
     severity = Severity::ERROR;
   }
-  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
+  logger->Log(severity, FormatString("ReplicationDone callback: %s, %s\n", ToString(state), status.ToString()));
   producer_state_ = state;
+  producer_status_ = status;
   producer_state_cv_.notify_all();
 }
 
@@ -239,7 +246,9 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
     }
   }
 
-  auto wait_rc = cp.WaitForCompletion(1000);
+  // Wait till the producer is done.
+  auto timeout_msec = std::max(cp.ops_timeout_msec_, cp.connect_timeout_msec_) + 1000;
+  auto wait_rc = cp.WaitForCompletion(timeout_msec);
   if (!wait_rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
   }

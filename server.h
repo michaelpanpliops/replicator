@@ -24,7 +24,7 @@ public:
   CheckpointProducer( const std::string& src_path, const std::string& client_ip,
                       int parallelism, int ops_timeout_msec, int connect_timeout_msec,
                       IKvPairSerializer& kv_pair_serializer);
-  ~CheckpointProducer() { DestroyCheckpoint(); }
+  ~CheckpointProducer();
 
   // Client requests processing methods
   RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
@@ -32,25 +32,27 @@ public:
   RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup
-  void ReplicationDone(ProducerState state);
+  void ReplicationDone(ProducerState state, const RepStatus&);
   RepStatus WaitForCompletion(uint32_t timeout_msec);
   RepStatus DestroyCheckpoint();
 
-  // The client_done_ is set to true after sending client ERROR or DONE
+  // The client_done_ is set to true after sending to the client ERROR, DONE, STOPPED
   bool IsClientDone() { return client_done_; };
+
+  const int ops_timeout_msec_;
+  const int connect_timeout_msec_;
 
 private:
   const std::string& src_path_;
   const std::string& client_ip_;
   const int parallelism_;
-  const int ops_timeout_msec_;
-  const int connect_timeout_msec_;
   uint32_t checkpoint_id_;
   std::string checkpoint_path_;
   bool client_done_ = false;
 
   // Producer state is updated in the ReplicationDone callback
   ProducerState producer_state_;
+  RepStatus producer_status_;
   std::mutex producer_state_mutex_;
   std::condition_variable producer_state_cv_;
 
