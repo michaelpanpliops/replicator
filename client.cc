@@ -18,14 +18,17 @@ CheckpointConsumer::CheckpointConsumer(int ops_timeout_msec, int connect_timeout
     std::make_unique<Replicator::Consumer>(ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 }
 
-void CheckpointConsumer::ReplicationDone(ConsumerState state, const std::string& error)
+void CheckpointConsumer::ReplicationDone(ConsumerState state)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
   std::lock_guard<std::mutex> lock(consumer_state_mutex_);
-  logger->Log(Severity::INFO, FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
+  auto severity = Severity::INFO;
+  if (state == ConsumerState::ERROR) {
+    severity = Severity::ERROR;
+  }
+  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
   consumer_state_ = state;
-  consumer_error_ = error;
   consumer_state_cv_.notify_all();
 }
 
@@ -126,8 +129,8 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ConsumerState, const std::string&)> done_cb =
-    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1, _2); 
+  std::function<void(ConsumerState)> done_cb =
+    std::bind(&CheckpointConsumer::ReplicationDone, consumer_.get(), _1); 
 
   // Start consumer and get the port number from it
   uint16_t port;
@@ -160,8 +163,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
 
   // Get the state from the consumer
   ConsumerState consumer_state;
-  std::string error;
-  auto rc = consumer_->ConsumerImpl().GetState(consumer_state, error);
+  auto rc = consumer_->ConsumerImpl().GetState(consumer_state);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::GetState failed\n"));
     return rc;
@@ -217,7 +219,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     auto wait_rc = consumer_->WaitForCompletion(50000);
     if (!wait_rc.IsOk()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
-      // return -1; - do not stop here, try to cleanup
+      return rc;
     }
 
     rc = consumer_->ConsumerImpl().Stop();
@@ -227,9 +229,16 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     }
     consumer_.reset();
     done = true;
-    return wait_rc.IsOk() ? RepStatus() : rc;
+    return wait_rc.IsOk() ? rc : wait_rc;
   }
 #endif
 
   return RepStatus();
+}
+
+void Cleanup() {
+  if (consumer_) {
+    auto rc = consumer_->ConsumerImpl().Stop();
+    consumer_.reset();
+  }
 }

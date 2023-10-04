@@ -103,8 +103,8 @@ RepStatus CheckpointProducer::StartStreaming(
 
   // Bind ReplicationDone callback
   using namespace std::placeholders;
-  std::function<void(ProducerState, const std::string&)> done_cb =
-    std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
+  std::function<void(ProducerState)> done_cb =
+    std::bind(&CheckpointProducer::ReplicationDone, this, _1); 
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
@@ -112,6 +112,7 @@ RepStatus CheckpointProducer::StartStreaming(
                                   done_cb);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
@@ -135,14 +136,15 @@ RepStatus CheckpointProducer::GetStatus(
   auto rc = producer_->GetStats(res.num_kv_pairs, res.num_bytes);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stats failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
   // Get producer state
-  std::string error;
-  rc = producer_->GetState(res.state, error);
+  rc = producer_->GetState(res.state);
   if (!rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("Producer::State failed\n"));
+    DestroyCheckpoint();
     return rc;
   }
 
@@ -184,14 +186,17 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   return RepStatus();
 }
 
-void CheckpointProducer::ReplicationDone(ProducerState state, const std::string& error)
+void CheckpointProducer::ReplicationDone(ProducerState state)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
   std::lock_guard<std::mutex> lock(producer_state_mutex_);
-  logger->Log(Severity::INFO, FormatString("ReplicationDone callback: %s %s\n", ToString(state), error));
+  auto severity = Severity::INFO;
+  if (state == ProducerState::ERROR) {
+    severity = Severity::ERROR;
+  }
+  logger->Log(severity, FormatString("ReplicationDone callback: %s\n", ToString(state)));
   producer_state_ = state;
-  producer_error_ = error;
   producer_state_cv_.notify_all();
 }
 
@@ -237,7 +242,6 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
   auto wait_rc = cp.WaitForCompletion(1000);
   if (!wait_rc.IsOk()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
-     // return -1; - do not stop here, try to cleanup
   }
 
   rc = cp.DestroyCheckpoint();

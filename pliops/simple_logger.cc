@@ -39,6 +39,8 @@ std::string SimpleLogger::GetSeverity(Severity level) {
     return "INFO";
   case Severity::WARNING:
     return "WARNING";
+  case Severity::FATAL:
+    return "FATAL";
   default:
     return "unknown";
   }

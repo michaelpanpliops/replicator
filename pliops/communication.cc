@@ -1,6 +1,7 @@
 #include "communication.h"
 
 #include <functional>
+#include <poll.h>
 
 
 namespace Replicator {
@@ -34,7 +35,8 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t
                           MSG_NOSIGNAL);
     if (bytes_sent == 0 && errno == 0) {
       // Connection closed by other party (EOF).
-      return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "Connection closed by other party (EOF).\n");
+      logger->Log(Severity::ERROR, FormatString("Connection closed by other party (EOF).\n"));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Connection closed by other party (EOF).\n");
     } else if (bytes_sent < 0) {
       logger->Log(Severity::ERROR, FormatString("Failed to send message size: %d\n", errno));
       return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Failed to send message size: %d\n", errno));
@@ -115,22 +117,19 @@ RepStatus Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
   uint64_t timeout_msec)
 {
-  // Use select to monitor the server socket for incoming connections with a timeout
-  fd_set read_fds;
-  FD_ZERO(&read_fds);
-  FD_SET(listen_c.socket_fd_, &read_fds);
+  int nfds = 1;
+  struct pollfd fds[nfds];
+  fds[0].fd = listen_c.socket_fd_;
+  fds[0].events = POLLIN;
 
-  struct timeval tv_timeout;
-  tv_timeout.tv_sec = timeout_msec / 1000;
-  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
+  int ret = poll(fds, nfds, timeout_msec);
 
-  int select_result = select(listen_c.socket_fd_ + 1, &read_fds, NULL, NULL, &tv_timeout);
-  if (select_result == -1) {
+  if (ret == 0) {
+    logger->Log(Severity::ERROR, FormatString("Accept timeout reached.\n"));
+    return RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Accept timeout reached.\n"));
+  } else if (ret == -1 || !(fds[0].revents & POLLIN)) {
     logger->Log(Severity::ERROR, FormatString("select error: %s\n", strerror(errno)));
     return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("select error: %s\n", strerror(errno)));
-  } else if (select_result == 0) {
-    logger->Log(Severity::ERROR, FormatString("Accept timeout reached.\n"));
-    return RepStatus(Code::TIMEOUT, Severity::ERROR, FormatString("Accept timeout reached.\n"));
   }
 
   int connfd = 0;
@@ -140,18 +139,22 @@ RepStatus Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
     return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Socket accepting failed: %d\n", errno));
   }
 
+  struct timeval tv_timeout;
+  tv_timeout.tv_sec = timeout_msec / 1000;
+  tv_timeout.tv_usec = (timeout_msec % 1000) * 1000;
+
   // SO_RCVTIMEO
   if (setsockopt(connfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
     logger->Log(Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
     close(connfd);
-    return RepStatus(Code::TIMEOUT, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout)\n"));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout)\n"));
 }
 
   // SO_SNDTIMEO
   if (setsockopt(connfd, SOL_SOCKET, SO_SNDTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
     logger->Log(Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
     close(connfd);
-    return RepStatus(Code::TIMEOUT, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
+    return RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set send timeout)\n"));
   }
 
   logger->Log(Severity::INFO, FormatString("Connection accepted.\n"));
@@ -168,7 +171,7 @@ RepStatus Bind(uint16_t& port, std::unique_ptr<Connection<ConnectionType::TCP_SO
   listenfd = socket(AF_INET, SOCK_STREAM, 0);
   if (-1 == listenfd) {
     logger->Log(Severity::ERROR, FormatString("Socket creation failed: %d\n", errno));
-    return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, FormatString("Socket creation failed: %d\n", errno));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Socket creation failed: %d\n", errno));
   }
 
   memset(&serv_addr, '0', sizeof(serv_addr));
@@ -222,7 +225,7 @@ RepStatus Connect(const std::string& destination_ip, const uint32_t destination_
   if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv_timeout, sizeof(tv_timeout)) < 0) {
       logger->Log(Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
       close(sockfd);
-      return RepStatus(Code::TIMEOUT, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Failed connecting socket: setsockopt (set receive timeout) \n"));
   }
 
   // SO_SNDTIMEO
@@ -249,7 +252,7 @@ RepStatus Connect(const std::string& destination_ip, const uint32_t destination_
       logger->Log(Severity::ERROR, FormatString("Failed connecting socket: %d\n", errno));
     }
     close(sockfd);
-    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Illegal server address: %d\n", errno));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Failed connecting socket: %d\n", errno));
   }
 
   connection.reset(new Connection<ConnectionType::TCP_SOCKET>(sockfd));

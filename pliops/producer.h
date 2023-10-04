@@ -35,14 +35,14 @@ public:
   RepStatus Start(const std::string& ip, uint16_t port,
             uint32_t max_num_of_threads, uint32_t parallelism,
             uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
-            std::function<void(ProducerState, const std::string&)>& done_callback);
+            std::function<void(ProducerState)>& done_callback);
   RepStatus Stop();
-  RepStatus GetState(ProducerState& state, std::string& error);
+  RepStatus GetState(ProducerState& state);
   RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
-  std::function<void(ProducerState, const std::string&)> done_callback_;
+  std::function<void(ProducerState)> done_callback_;
 
   // Shard connection and its connection thread
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;
@@ -84,11 +84,17 @@ private:
   // The replication starting time
   std::chrono::time_point<std::chrono::system_clock> start_time_;
 
-  // State and error message
+  // State and status
   ProducerState state_ = ProducerState::IDLE;
-  std::string error_;
+  RepStatus rc_;
   std::mutex state_mutex_;
-  void SetState(const ProducerState& state, const std::string& error);
+  void SetState(const ProducerState& state, const RepStatus& error);
+
+  // Enqueue limit timeout
+  bool EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
+                     std::pair<std::string, std::string>&& message,
+                     std::atomic<bool>& kill,
+                     uint64_t timeout_msec);
 };
 
 }

@@ -30,14 +30,14 @@ public:
                     IKvPairSerializer& kv_pair_serializer);
   virtual ~Consumer();
   RepStatus Start(const std::string& replica_path, uint16_t& port,
-            std::function<void(ConsumerState, const std::string&)>& done_callback);
+            std::function<void(ConsumerState)>& done_callback);
   RepStatus Stop();
-  RepStatus GetState(ConsumerState& state, std::string& error);
+  RepStatus GetState(ConsumerState& state);
   RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
-  std::function<void(ConsumerState, const std::string&)> done_callback_;
+  std::function<void(ConsumerState)> done_callback_;
 
   // Socket to listen for an incoming connection
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;
@@ -74,9 +74,9 @@ private:
 
   // State and error message
   ConsumerState state_ = ConsumerState::IDLE;
-  std::string error_;
+  RepStatus rc_;
   std::mutex state_mutex_;
-  void SetState(const ConsumerState& state, const std::string& error);
+  void SetState(const ConsumerState& state, const RepStatus& rc);
 };
 
 }
