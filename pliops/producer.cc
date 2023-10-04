@@ -264,7 +264,7 @@ void Producer::StopImpl()
 
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
-  if (message_queue_ && !EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_) ) {
+  if (message_queue_ && !EnqueueTimed(message_queue_, {"",""}, false, timeout_msec_) ) {
       logger->Log(Severity::ERROR, FormatString("enqueue failed, reason: timeout\n"));
       SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
   }
@@ -333,7 +333,7 @@ void Producer::SetState(const ProducerState& state, const RepStatus& status)
 
 bool Producer::EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
                    std::pair<std::string, std::string>&& message,
-                   std::atomic<bool>& kill,
+                   bool kill,
                    uint64_t timeout_msec) {
   std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
   bool enqueued = false;
