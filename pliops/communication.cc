@@ -108,8 +108,8 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std:
     total_bytes_read += bytes_read;
   }
   // Parse the message
-  std::tie(key, value) = kv_pair_serializer.Deserialize(buffer, message_size);
-  return RepStatus();
+  auto rc = kv_pair_serializer.Deserialize(buffer, message_size, key, value);
+  return rc;
 }
 
 template<>

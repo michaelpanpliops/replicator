@@ -66,7 +66,12 @@ int main(int argc, char* argv[]) {
   ParseArgs(argc, argv, parallelism, src_path, client_ip, timeout_msec);
   logger.reset(new SimpleLogger());
 
-  RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
+  RepStatus rpc_rc;
+  RpcChannel rpc(RpcChannel::Pier::Server, client_ip, rpc_rc);
+  if (!rpc_rc.IsOk()) {
+    logger->Log(Severity::ERROR, FormatString("rpc failed: %s\n", rpc_rc.ToString()));
+    exit(1);
+  }
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism, timeout_msec, kv_pair_serializer);
   if (!rc.IsOk()) {

@@ -64,7 +64,7 @@ class RpcChannel {
 public:
   enum class Pier { Client, Server };
 
-  RpcChannel(Pier pier, const std::string& pier_ip);
+  RpcChannel(Pier pier, const std::string& pier_ip, RepStatus& rc);
   ~RpcChannel();
 
   template<typename Tin, typename Tout>
