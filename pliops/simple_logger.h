@@ -10,8 +10,9 @@ inline std::mutex message_lock;
 
 class SimpleLogger : public ILogger {
 
-  void Log(LogLevel level, const std::string& message) override;
+  void Log(Severity level, const std::string& message) override;
   std::string GetCurrentTimeString();
+  std::string GetSeverity(Severity level);
 };
 
 

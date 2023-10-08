@@ -18,12 +18,14 @@
 
 #include "defs.h"
 #include "pliops/logger.h"
+#include "pliops/status.h"
 #include "utils/string_util.h"
 
 
 using namespace Replicator;
 
 using ServerState = Replicator::State;
+using RepStatus = Replicator::Status;
 
 #pragma pack(push, 0)
 
@@ -66,39 +68,39 @@ public:
   ~RpcChannel();
 
   template<typename Tin, typename Tout>
-  int SendCommand(const Tin& in, Tout& out)
+  RepStatus SendCommand(const Tin& in, Tout& out)
   {
     if (::send(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
-      return -1;
+      logger->Log(Severity::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
     }
     if (::recv(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      logger->Log(LogLevel::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
-      return -1;
+      logger->Log(Severity::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
     }
-    return 0;
+    return RepStatus();
   }
 
   template<typename Tin, typename Tout>
-  int ProcessCommand(std::function<int(const Tin& in, Tout& out)>& callback)
+  RepStatus ProcessCommand(std::function<RepStatus(const Tin& in, Tout& out)>& callback)
   {
     Tin in;
     Tout out;
 
     if (::recv(socket_, &in, sizeof(in), 0) != sizeof(in)) {
-      logger->Log(LogLevel::ERROR,FormatString("Rpc: Recv failed: %d\n", errno));
-      return -1;
+      logger->Log(Severity::ERROR,FormatString("Rpc: Recv failed: %d\n", errno));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
     }
     auto rc = callback(in, out);
-    if (rc) {
-      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: callback\n"));
-      return -1;
+    if (!rc.IsOk()) {
+      logger->Log(Severity::ERROR, FormatString("Rpc: Send failed: callback\n"));
+      return rc;
     }
     if (::send(socket_, &out, sizeof(out), 0) != sizeof(out)) {
-      logger->Log(LogLevel::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
-      return -1;
+      logger->Log(Severity::ERROR, FormatString("Rpc: Send failed: %d\n", errno));
+      return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Rpc: Send failed: callback\n"));
     }
-    return 0;
+    return RepStatus();
   }
 
   int socket_;

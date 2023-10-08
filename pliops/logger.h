@@ -4,18 +4,13 @@
 #include <string>
 #include <memory>
 
-enum class LogLevel {
-    DEBUG,
-    INFO,
-    WARNING,
-    ERROR
-};
+#include "defs.h"
 
 class ILogger {
 public:
     virtual ~ILogger() {}
 
-    virtual void Log(LogLevel level, const std::string& message) = 0;
+    virtual void Log(Severity level, const std::string& message) = 0;
 };
 
 

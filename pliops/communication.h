@@ -18,9 +18,12 @@
 #include "pliops/logger.h"
 #include "utils/string_util.h"
 #include "pliops/kv_pair_serializer.h"
+#include "pliops/status.h"
 
 
 namespace Replicator {
+
+using RepStatus = Replicator::Status;
 
 enum class ConnectionType : uint8_t {
   TCP_SOCKET = 0
@@ -32,9 +35,9 @@ class Connection {
     static_assert("Unsupported protocol type");
   }
   // Send a KV pair over the connection
-  int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
+  RepStatus Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
   // Receive a KV pair from the connection
-  int Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
+  RepStatus Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
 };
 
 template<>
@@ -42,8 +45,8 @@ class Connection<ConnectionType::TCP_SOCKET> {
   public:
     Connection(int socket_fd);
     virtual ~Connection();
-    int Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
-    int Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
+    RepStatus Send(const char* key, uint32_t key_size, const char* value, uint32_t value_size, IKvPairSerializer& kv_pair_serializer);
+    RepStatus Receive(std::string& key, std::string& value, IKvPairSerializer& kv_pair_serializer);
 
   public:
     int socket_fd_;
@@ -51,41 +54,41 @@ class Connection<ConnectionType::TCP_SOCKET> {
 };
 
 template<ConnectionType Protocol>
-int Accept(Connection<Protocol>& listen_c,
+RepStatus Accept(Connection<Protocol>& listen_c,
   std::unique_ptr<Connection<Protocol>>& accept_c,
   uint64_t timeout_msec)
 {
   static_assert("Unsupported accept type");
-  return -1;
+  return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR);
 }
 
 template<>
-int Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
+RepStatus Accept(Connection<ConnectionType::TCP_SOCKET>& listen_c,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& accept_c,
   uint64_t timeout_msec);
 
 template<ConnectionType Protocol>
-int Bind(uint16_t& port,
+RepStatus Bind(uint16_t& port,
   std::unique_ptr<Connection<Protocol>>& connection)
 {
   static_assert("Unsupported connection type");
-  return -1;
+  return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR);
 }
 
 template<>
-int Bind(uint16_t& port,
+RepStatus Bind(uint16_t& port,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection);
 
 template<ConnectionType Protocol>
-int Connect(const std::string& destination_ip, uint32_t destination_port,
+RepStatus Connect(const std::string& destination_ip, uint32_t destination_port,
   std::unique_ptr<Connection<Protocol>>& connection, uint64_t timeout_msec)
 {
   static_assert("Unsupported connection type");
-  return -1;
+  return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR);
 }
 
 template<>
-int Connect(const std::string& destination_ip, uint32_t destination_port,
+RepStatus Connect(const std::string& destination_ip, uint32_t destination_port,
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>>& connection, uint64_t timeout_msec);
 
 }

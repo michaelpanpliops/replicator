@@ -13,6 +13,8 @@
 namespace Replicator {
 
 using ConsumerState = Replicator::State;
+using DBStatus = ROCKSDB_NAMESPACE::Status;
+using RepStatus = Replicator::Status;
 
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
 constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
@@ -26,15 +28,15 @@ class Consumer {
 public:
   explicit Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer);
   virtual ~Consumer();
-  int Start(const std::string& replica_path, uint16_t& port,
-            std::function<void(ConsumerState, const std::string&)>& done_callback);
-  int Stop();
-  int GetState(ConsumerState& state, std::string& error);
-  int GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
+  RepStatus Start(const std::string& replica_path, uint16_t& port,
+            std::function<void(ConsumerState, const RepStatus&)>& done_callback);
+  RepStatus Stop();
+  RepStatus GetState(ConsumerState& state, RepStatus& status);
+  RepStatus GetStats(uint64_t& num_kv_pairs, uint64_t& num_bytes);
 
 private:
   // Callback to be called on completion/error
-  std::function<void(ConsumerState, const std::string&)> done_callback_;
+  std::function<void(ConsumerState, const RepStatus&)> done_callback_;
 
   // Socket to listen for an incoming connection
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection_;
@@ -54,7 +56,7 @@ private:
 
   // DB
   ROCKSDB_NAMESPACE::DB* shard_ = nullptr;
-  int OpenReplica(const std::string& replica_path);
+  RepStatus OpenReplica(const std::string& replica_path);
 
   // Signal threads to exit
   std::atomic<bool> kill_;
@@ -69,9 +71,9 @@ private:
 
   // State and error message
   ConsumerState state_ = ConsumerState::IDLE;
-  std::string error_;
+  RepStatus status_;
   std::mutex state_mutex_;
-  void SetState(const ConsumerState& state, const std::string& error);
+  void SetState(const ConsumerState& state, const RepStatus& status);
 
   // Operating timeout
   uint64_t timeout_msec_;
