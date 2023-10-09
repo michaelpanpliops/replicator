@@ -50,7 +50,7 @@ void Consumer::WriterThread() {
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s", key, status.ToString())));
+      SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s", key, status.ToString())));
       return;
     }
 
@@ -86,7 +86,7 @@ void Consumer::CommunicationThread()
   logger->Log(Severity::INFO, FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
   auto rc = Accept(*connection_, connection, connect_timeout_msec_);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
     SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
     return;
@@ -95,7 +95,7 @@ void Consumer::CommunicationThread()
   std::string key, value;
   while(!kill_) {
     rc = connection->Receive(key, value, kv_pair_serializer_);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
       SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
       return;
@@ -151,14 +151,14 @@ RepStatus Consumer::Start(const std::string& replica_path, uint16_t& port,
 
   // Open replica
   auto rc = OpenReplica(replica_path);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("OpenReplica failed\n"));
     return rc;
   }
 
   // Listen for incoming connection
   rc = Bind(port, connection_);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Socket binding failed\n"));
     return rc;
   }
@@ -209,20 +209,21 @@ RepStatus Consumer::Stop()
 {
   using namespace std::literals;
 
-  // Move state into STOPPED, so we won't get any ERROR/DONE notifications from now
-  SetState(ConsumerState::STOPPED, RepStatus());
-
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Consumer::StopImpl, this);
   auto max_timeout = std::max(std::chrono::milliseconds(ops_timeout_msec_), std::chrono::milliseconds(connect_timeout_msec_));
   if (future->wait_for(max_timeout + 10s) == std::future_status::timeout) {
     logger->Log(Severity::FATAL, "Stop failed, some threads are stuck.\n");
+    SetState(ConsumerState::ERROR, RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, 
+                                            FormatString("Stop failed, some threads are stuck.")));
     // If the app will try destroy the Consumer object, it will crash
     return RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, "Stop failed, some threads are stuck.\n");
   } else {
     delete future;
   }
 
+  // Move state into STOPPED
+  SetState(ConsumerState::STOPPED, RepStatus());
   logger->Log(Severity::INFO, "Consumer finished its jobs\n");
   return RepStatus();
 }

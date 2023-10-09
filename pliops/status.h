@@ -37,7 +37,7 @@ class Status {
 public:
   Status(Code code = Code::OK, Severity severity = Severity::INFO, const std::string& message = "");
   std::string ToString() const;
-  bool IsOk();
+  bool ok() const;
 
   Severity severity_;
   std::string message_;

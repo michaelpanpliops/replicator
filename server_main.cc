@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
   KvPairSimpleSerializer kv_pair_serializer;
   auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism,
                               ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, "ProvideCheckpoint failed\n");
     exit(1);
   }

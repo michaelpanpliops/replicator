@@ -44,7 +44,7 @@ RepStatus CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
   logger->Log(Severity::INFO, FormatString("WaitForCompletion: %d msec\n", timeout_msec));
   std::unique_lock lock(consumer_state_mutex_);
   auto rc = consumer_state_cv_.wait_for(lock, 1ms*timeout_msec, [&] { 
-    return consumer_state_ == ConsumerState::ERROR || consumer_state_ == ConsumerState::DONE;
+    return IsFinalState(consumer_state_);
   });
 
   return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
@@ -56,7 +56,7 @@ RepStatus CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint
   CreateCheckpointRequest req{shard};
   CreateCheckpointResponse res{};
   auto rc = rpc.SendCommand(req, res);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("rpc.SendCommand failed\n"));
     return rc;
   }
@@ -71,7 +71,7 @@ RepStatus StartStreaming(RpcChannel &rpc, uint16_t port,
   StartStreamingRequest req{checkpoint_id_, num_threads, port };
   StartStreamingResponse res{};
   auto rc = rpc.SendCommand(req, res);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("rpc.SendCommand failed\n"));
     return rc;
   }
@@ -85,7 +85,7 @@ RepStatus GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs,
   GetStatusRequest req{checkpoint_id_};
   GetStatusResponse res;
   auto rc = rpc.SendCommand(req, res);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("rpc.SendCommand failed\n"));
     return rc;
   }
@@ -96,7 +96,6 @@ RepStatus GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs,
 }
 
 // Main entry function 
-// Kuaishou function: SyncManager::ReStoreFrom(const std::string &host, int32_t shard)->Status
 RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
                               int desired_num_of_threads,
                               int ops_timeout_msec,
@@ -106,7 +105,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
   // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
   auto rc = CreateCheckpoint(rpc, shard, checkpoint_id);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     return rc;
   }
@@ -139,7 +138,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
   // Start consumer and get the port number from it
   uint16_t port;
   rc = consumer_->ConsumerImpl().Start(replica_path, port, done_cb);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::Start failed\n"));
     return rc;
   }
@@ -147,7 +146,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
   // RPC call: Tell server to start streaming
   ServerState server_status;
   rc = StartStreaming(rpc, port, desired_num_of_threads, server_status);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     return rc;
   }
@@ -169,7 +168,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   ConsumerState consumer_state;
   RepStatus consumer_status;
   auto rc = consumer_->ConsumerImpl().GetState(consumer_state, consumer_status);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::GetState failed\n"));
     return rc;
   }
@@ -177,7 +176,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // Get statistics from the consumer
   uint64_t client_num_kv_pairs, client_num_bytes;
   rc = consumer_->ConsumerImpl().GetStats(client_num_kv_pairs, client_num_bytes);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Consumer::GetStats failed\n"));
     return rc;
   }
@@ -191,7 +190,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // Cleanup and return if the consumer it is done
   if (IsFinalState(consumer_state)) {
     rc = consumer_->ConsumerImpl().Stop();
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Consumer::Stop failed\n"));
       return rc;
     }
@@ -206,7 +205,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   ServerState server_state;
   uint64_t server_num_kv_pairs, server_num_bytes;
   rc = GetStatus(rpc, server_state, server_num_kv_pairs, server_num_bytes);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("GetStatus failed\n"));
     return rc;
   }
@@ -223,13 +222,13 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     // Wait for consumer to complete
     auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
     rc = consumer_->WaitForCompletion(timeout_msec);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
       return rc;
     }
 
     rc = consumer_->ConsumerImpl().Stop();
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Consumer::Stop failed\n"));
       return rc;
     }

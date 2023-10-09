@@ -10,7 +10,7 @@ std::string Status::ToString() const {
   return CodeToString(code_) + " - " + SeverityToString(severity_) + ": " + message_;
 }
 
-bool Status::IsOk() {
+bool Status::ok() const {
   return code_ == Code::OK;
 }
 

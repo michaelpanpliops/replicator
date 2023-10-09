@@ -29,7 +29,6 @@ CheckpointProducer::~CheckpointProducer()
 }
 
 // Process create-checkpoint request
-// Kuaishou function: SyncServiceImpl::RequireCheckpoint(...)
 RepStatus CheckpointProducer::CreateCheckpoint(
                           const CreateCheckpointRequest& req,
                           CreateCheckpointResponse& res)
@@ -85,7 +84,7 @@ RepStatus CheckpointProducer::CreateCheckpoint(
   // Open the checkpoint
   checkpoint_id_ = GetUniqueCheckpointName();
   auto rc = producer_->OpenShard(checkpoint_path_);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Producer::OpenShard failed\n"));
     return rc;
   }
@@ -95,7 +94,6 @@ RepStatus CheckpointProducer::CreateCheckpoint(
 }
 
 // Process start-streaming request
-// Kuaishou should create a new function for this request
 RepStatus CheckpointProducer::StartStreaming(
                           const StartStreamingRequest& req,
                           StartStreamingResponse& res)
@@ -118,7 +116,7 @@ RepStatus CheckpointProducer::StartStreaming(
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
                                   parallelism_, ops_timeout_msec_, connect_timeout_msec_,
                                   done_cb);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Start failed\n"));
     return rc;
   }
@@ -128,7 +126,6 @@ RepStatus CheckpointProducer::StartStreaming(
 }
 
 // Process get-status request
-// Kuaishou should create a new function for this request
 RepStatus CheckpointProducer::GetStatus(
                           const GetStatusRequest& req,
                           GetStatusResponse& res)
@@ -141,7 +138,7 @@ RepStatus CheckpointProducer::GetStatus(
 
   // Get producer statistics
   auto rc = producer_->GetStats(res.num_kv_pairs, res.num_bytes);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stats failed\n"));
     return rc;
   }
@@ -149,7 +146,7 @@ RepStatus CheckpointProducer::GetStatus(
   // Get producer state
   RepStatus status;
   rc = producer_->GetState(res.state, status);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Producer::GetState failed\n"));
     return rc;
   }
@@ -168,7 +165,7 @@ RepStatus CheckpointProducer::WaitForCompletion(uint32_t timeout_msec)
   logger->Log(Severity::INFO, FormatString("WaitForCompletion: %d msec\n", timeout_msec));
   std::unique_lock lock(producer_state_mutex_);
   auto rc = producer_state_cv_.wait_for(lock, 1ms*timeout_msec, [&] { 
-    return producer_state_ == ProducerState::ERROR || producer_state_ == ProducerState::DONE;
+    return IsFinalState(producer_state_);
   });
 
   return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
@@ -177,7 +174,7 @@ RepStatus CheckpointProducer::WaitForCompletion(uint32_t timeout_msec)
 RepStatus CheckpointProducer::DestroyCheckpoint() {
   // Cleanup producer
   auto rc = producer_->Stop();
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Producer::Stop failed\n"));
     return rc;
   }
@@ -223,7 +220,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
     create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
   auto rc = rpc.ProcessCommand(create_checkpoint_cb);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::CreateCheckpoint failed\n"));
     return rc;
   }
@@ -231,7 +228,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
   std::function<RepStatus(const StartStreamingRequest&, StartStreamingResponse&)>
     start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
   rc = rpc.ProcessCommand(start_streaming_cb);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::StartStreaming failed\n"));
     return rc;
   }
@@ -240,7 +237,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
     get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
   while(!cp.IsClientDone()) {
     rc = rpc.ProcessCommand(get_status_cb);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::GetStatus failed\n"));
       return rc;
     }
@@ -249,15 +246,15 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
   // Wait till the producer is done.
   auto timeout_msec = std::max(cp.ops_timeout_msec_, cp.connect_timeout_msec_) + 1000;
   auto wait_rc = cp.WaitForCompletion(timeout_msec);
-  if (!wait_rc.IsOk()) {
+  if (!wait_rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
   }
 
   rc = cp.DestroyCheckpoint();
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("CheckpointProducer::DestroyCheckpoint failed\n"));
     return rc;
   }
 
-  return wait_rc.IsOk() ? RepStatus() : rc;
+  return wait_rc.ok() ? RepStatus() : rc;
 }
