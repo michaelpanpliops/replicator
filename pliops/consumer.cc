@@ -10,8 +10,13 @@
 
 namespace Replicator {
 
-Consumer::Consumer(uint64_t timeout_msec, IKvPairSerializer& kv_pair_serializer)
-  : kill_(false), timeout_msec_(timeout_msec), kv_pair_serializer_(kv_pair_serializer)
+Consumer::Consumer(
+  uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
+  IKvPairSerializer& kv_pair_serializer)
+  : kill_(false)
+  , ops_timeout_msec_(ops_timeout_msec)
+  , connect_timeout_msec_(connect_timeout_msec)
+  , kv_pair_serializer_(kv_pair_serializer)
 {}
 
 Consumer::~Consumer() {
@@ -27,9 +32,9 @@ void Consumer::WriterThread() {
   while(!kill_) {
     // Pop the next KV pair.
     std::pair<std::string,std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed to dequeue message, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Writer thread: Failed to dequeue message, reason: timeout\n"));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, "Writer thread: Failed to dequeue message, reason: timeout"));
       return;
     }
     std::string& key = message.first;
@@ -45,7 +50,7 @@ void Consumer::WriterThread() {
     auto status = shard_->Put(wo, key, value);
     if(!status.ok()) {
       logger->Log(Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString()));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s\n", key, status.ToString())));
+      SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: Failed inserting key %s, reason: %s", key, status.ToString())));
       return;
     }
 
@@ -59,7 +64,7 @@ void Consumer::WriterThread() {
   shard_ = nullptr;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString()));
-    SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s\n", status.ToString())));
+    SetState(ConsumerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Writer thread: shard_->Close failed, reason: %s", status.ToString())));
     return;
   }
 
@@ -80,24 +85,24 @@ void Consumer::CommunicationThread()
 {
   logger->Log(Severity::INFO, FormatString("Communication thread started.\n"));
   std::unique_ptr<Connection<ConnectionType::TCP_SOCKET>> connection;
-  auto rc = Accept(*connection_, connection, timeout_msec_);
-  if (!rc.IsOk()) {
+  auto rc = Accept(*connection_, connection, connect_timeout_msec_);
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-    SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
+    SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
     return;
   }
 
   std::string key, value;
   while(!kill_) {
     rc = connection->Receive(key, value, kv_pair_serializer_);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString()));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s\n", rc.ToString())));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: %s", rc.ToString())));
       return;
     }
-    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(timeout_msec_))) {
+    if(!message_queue_->wait_enqueue_timed({key, value}, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n"));
-      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout\n")));
+      SetState(ConsumerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to enqueue, reason: timeout")));
       return;
     }
     if (key.empty()) {
@@ -146,14 +151,14 @@ RepStatus Consumer::Start(const std::string& replica_path, uint16_t& port,
 
   // Open replica
   auto rc = OpenReplica(replica_path);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("OpenReplica failed\n"));
     return rc;
   }
 
   // Listen for incoming connection
   rc = Bind(port, connection_);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("Socket binding failed\n"));
     return rc;
   }
@@ -204,19 +209,21 @@ RepStatus Consumer::Stop()
 {
   using namespace std::literals;
 
-  // Move state into STOPPED, so we won't get any ERROR/DONE notifications from now
-  SetState(ConsumerState::STOPPED, RepStatus());
-
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Consumer::StopImpl, this);
-  if (future->wait_for(std::chrono::milliseconds(timeout_msec_) + 10s) == std::future_status::timeout) {
+  auto max_timeout = std::max(std::chrono::milliseconds(ops_timeout_msec_), std::chrono::milliseconds(connect_timeout_msec_));
+  if (future->wait_for(max_timeout + 10s) == std::future_status::timeout) {
     logger->Log(Severity::FATAL, "Stop failed, some threads are stuck.\n");
+    SetState(ConsumerState::ERROR, RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, 
+                                            FormatString("Stop failed, some threads are stuck.")));
     // If the app will try destroy the Consumer object, it will crash
     return RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, "Stop failed, some threads are stuck.\n");
   } else {
     delete future;
   }
 
+  // Move state into STOPPED
+  SetState(ConsumerState::STOPPED, RepStatus());
   logger->Log(Severity::INFO, "Consumer finished its jobs\n");
   return RepStatus();
 }

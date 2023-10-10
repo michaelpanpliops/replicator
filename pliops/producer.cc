@@ -56,7 +56,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   auto status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
-    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString())));
+    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s", status.ToString())));
     return;
   }
 
@@ -67,7 +67,7 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
     logger->Log(Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
-    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n"));
+    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, "Reader thread: db->NewIterator returned nullptr"));
     return;
   }
 
@@ -94,13 +94,13 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     key = iterator->key();
     value = iterator->value();
 
-    if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, timeout_msec_)) {
+    if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, ops_timeout_msec_)) {
       // We must release the iterator here, otherwise DB::Close will crash
       status = iterator->Close();
       delete iterator;
 
       logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
+      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
       return;
     }
 
@@ -117,16 +117,16 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   delete iterator;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
-    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString())));
+    SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s", status.ToString())));
   }
 
   // The following code must be under lock to ensure atomicity
   std::lock_guard<std::mutex> lock(active_reader_threads_mutex_);
   active_reader_threads_count_--;
   // The last active thread signals end of communications
-  if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, timeout_msec_)) {
+  if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, ops_timeout_msec_)) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
-    SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
+    SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
   }
 }
 
@@ -135,15 +135,15 @@ void Producer::CommunicationThread() {
   std::string key, value;
   while(!kill_) {
     std::pair<std::string, std::string> message;
-    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(timeout_msec_))) {
+    if (!message_queue_->wait_dequeue_timed(message, msec_to_usec(ops_timeout_msec_))) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n"));
-      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout\n")));
+      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: Failed to dequeue message, reason: timeout")));
       return;
     }
     auto rc = connection_->Send(message.first.c_str(), message.first.size(), message.second.c_str(), message.second.size(), kv_pair_serializer_);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Communication thread: connection_->Send failed\n"));
-      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: connection_->Send failed\n")));
+      SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: connection_->Send failed")));
       return;
     }
     // Poison pill, all readers finished their work
@@ -154,7 +154,7 @@ void Producer::CommunicationThread() {
       shard_ = nullptr;
       if (!status.ok()) {
         logger->Log(Severity::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString()));
-        SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s\n", status.ToString())));
+        SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Communication thread: shard_->Close failed, reason: %s", status.ToString())));
         return;
       }
 
@@ -200,11 +200,13 @@ RepStatus Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::v
 }
 
 RepStatus Producer::Start(const std::string& ip, uint16_t port,
-                    uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
+                    uint32_t max_num_of_threads, uint32_t parallelism,
+                    uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
                     std::function<void(ProducerState, const RepStatus&)>& done_callback)
 {
   done_callback_ = done_callback;
-  timeout_msec_ = timeout_msec;
+  ops_timeout_msec_ = ops_timeout_msec;
+  connect_timeout_msec_ = connect_timeout_msec;
 
   // Move state into IN_PROGRESS
   assert(state_ == ProducerState::IDLE);
@@ -212,7 +214,7 @@ RepStatus Producer::Start(const std::string& ip, uint16_t port,
 
   // Split into ranges
   RepStatus rc = CalculateThreadKeyRanges(max_num_of_threads, thread_key_ranges_);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, "CalculateThreadKeyRanges failed\n");
     return rc;
   }
@@ -221,8 +223,8 @@ RepStatus Producer::Start(const std::string& ip, uint16_t port,
   // Connect to consumer
   logger->Log(Severity::INFO, "Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, timeout_msec_);
-  if (!rc.IsOk()) {
+  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, connect_timeout_msec_);
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, "Socket connect failed\n");
     return rc;
   }
@@ -265,10 +267,7 @@ void Producer::StopImpl()
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
   std::atomic<bool> dummy(false);
-  if (message_queue_ && !EnqueueTimed(message_queue_, {"",""}, dummy, timeout_msec_) ) {
-      logger->Log(Severity::ERROR, FormatString("enqueue failed, reason: timeout\n"));
-      SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n")));
-  }
+  if (message_queue_) EnqueueTimed(message_queue_, {"",""}, dummy, ops_timeout_msec_);
   if (communication_thread_) communication_thread_->join();
   connection_.reset();
   message_queue_.reset();
@@ -285,19 +284,21 @@ RepStatus Producer::Stop()
 {
   using namespace std::literals;
 
-  // Move state into STOPPED, so we won't get any ERROR/DONE notifications from now
-  SetState(ProducerState::STOPPED, RepStatus());
-
   std::future<void>* future = new std::future<void>;
   *future = std::async(std::launch::async, &Producer::StopImpl, this);
-  if (future->wait_for(std::chrono::milliseconds(timeout_msec_) + 10s) == std::future_status::timeout) {
+  auto max_timeout = std::max(std::chrono::milliseconds(ops_timeout_msec_), std::chrono::milliseconds(connect_timeout_msec_));
+  if (future->wait_for(max_timeout + 10s) == std::future_status::timeout) {
     logger->Log(Severity::FATAL, "Stop failed, some threads are stuck.\n");
+    SetState(ProducerState::ERROR, RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, 
+                                            FormatString("Stop failed, some threads are stuck.")));
     // If the app will try destroy the Producer object, it will crash
-    return RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, "Stop failed, some threads are stuck.\n");
+    return RepStatus(Code::REPLICATOR_FAILURE, Severity::FATAL, "Stop failed, some threads are stuck.");
   } else {
     delete future;
   }
 
+  // Move state into STOPPED
+  SetState(ProducerState::STOPPED, RepStatus());
   logger->Log(Severity::INFO, "Producer finished its jobs.\n");
   return RepStatus();
 }
@@ -327,7 +328,7 @@ void Producer::SetState(const ProducerState& state, const RepStatus& status)
   state_ = state;
   status_ = status;
   // Call the callback for final states only
-  if (IsFinalState(state_)) {
+  if (IsFinalState(state_) && done_callback_) {
     done_callback_(state_, status_);
   }
 }

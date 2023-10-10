@@ -11,21 +11,24 @@
 
 // The main function for shard replication
 RepStatus ProvideCheckpoint(RpcChannel& rpc,
-                      const std::string &src_path,
-                      const std::string& client_ip,
-                      int parallelism,
-                      uint64_t timeout_msec,
-                      IKvPairSerializer& kv_pair_serializer);
+                            const std::string &src_path,
+                            const std::string& client_ip,
+                            int parallelism,
+                            int ops_timeout_msec,
+                            int connect_timeout_msec,
+                            IKvPairSerializer& kv_pair_serializer);
 
 class CheckpointProducer
 {
 public:
-  CheckpointProducer(const std::string &src_path, const std::string& client_ip, int parallelism, IKvPairSerializer& kv_pair_serializer);
-  ~CheckpointProducer() { DestroyCheckpoint(); }
+  CheckpointProducer( const std::string& src_path, const std::string& client_ip,
+                      int parallelism, int ops_timeout_msec, int connect_timeout_msec,
+                      IKvPairSerializer& kv_pair_serializer);
+  ~CheckpointProducer();
 
   // Client requests processing methods
   RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  RepStatus StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res, uint64_t timeout_msec);
+  RepStatus StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
   RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
 
   // Synchronization and cleanup
@@ -35,6 +38,9 @@ public:
 
   // The client_done_ is set to true after sending to the client ERROR, DONE, STOPPED
   bool IsClientDone() { return client_done_; };
+
+  const int ops_timeout_msec_;
+  const int connect_timeout_msec_;
 
 private:
   const std::string& src_path_;
