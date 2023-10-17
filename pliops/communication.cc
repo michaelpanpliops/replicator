@@ -22,7 +22,10 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t
 {
   // Create the message
   std::vector<char> message;
-  kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
+  auto rc = kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
+  if (!rc.IsOk()) {
+    return rc;
+  }
 
   // Send the size of the message
   uint32_t message_size = htonl(message.size());

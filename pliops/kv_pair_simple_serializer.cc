@@ -12,7 +12,7 @@
 namespace Replicator {
 
 
-void KvPairSimpleSerializer::Serialize(const char* key, uint32_t key_size, const char* value, uint32_t value_size, std::vector<char>& buffer) {
+RepStatus KvPairSimpleSerializer::Serialize(const char* key, uint32_t key_size, const char* value, uint32_t value_size, std::vector<char>& buffer) {
     uint32_t message_size = sizeof(key_size) + key_size + sizeof(value_size) + value_size;
     buffer.resize(message_size);
     char* ptr = buffer.data();
@@ -23,6 +23,7 @@ void KvPairSimpleSerializer::Serialize(const char* key, uint32_t key_size, const
     memcpy(ptr, &value_size, sizeof(value_size));
     ptr += sizeof(value_size);
     memcpy(ptr, value, value_size);
+    return RepStatus();
 }
 RepStatus KvPairSimpleSerializer::Deserialize(const char* buf, uint32_t buf_size, std::string& key, std::string& value) {
     uint32_t key_size = 0;
