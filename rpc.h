@@ -39,7 +39,6 @@ struct CreateCheckpointResponse {
 
 struct StartStreamingRequest {
   uint32_t checkpoint_id;  
-  uint32_t max_num_of_threads;
   uint16_t consumer_port;
 };
 

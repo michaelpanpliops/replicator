@@ -14,10 +14,10 @@ uint32_t GetUniqueCheckpointName() { return 12345; }
 }
 
 CheckpointProducer::CheckpointProducer(
-  const std::string &src_path, const std::string& client_ip,
+  const std::string &src_path, const std::string& client_ip, int max_num_ranges,
   int parallelism, int ops_timeout_msec, int connect_timeout_msec,
   IKvPairSerializer& kv_pair_serializer)
-  : src_path_(src_path), client_ip_(client_ip), parallelism_(parallelism)
+  : src_path_(src_path), client_ip_(client_ip), max_num_ranges_(max_num_ranges), parallelism_(parallelism)
   , ops_timeout_msec_(ops_timeout_msec), connect_timeout_msec_(connect_timeout_msec)
 {
   producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
@@ -99,7 +99,7 @@ RepStatus CheckpointProducer::StartStreaming(
                           StartStreamingResponse& res)
 {
   logger->Log(Severity::INFO, FormatString("StartStreaming: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
-                client_ip_.c_str(), req.checkpoint_id, req.consumer_port, req.max_num_of_threads));
+                client_ip_.c_str(), req.checkpoint_id, req.consumer_port, max_num_ranges_));
 
   // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
   if (req.checkpoint_id != checkpoint_id_) {
@@ -113,7 +113,7 @@ RepStatus CheckpointProducer::StartStreaming(
     std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
-  RepStatus rc = producer_->Start(client_ip_, req.consumer_port, req.max_num_of_threads,
+  RepStatus rc = producer_->Start(client_ip_, req.consumer_port, max_num_ranges_,
                                   parallelism_, ops_timeout_msec_, connect_timeout_msec_,
                                   done_cb);
   if (!rc.ok()) {
@@ -207,6 +207,7 @@ void CheckpointProducer::ReplicationDone(ProducerState state, const RepStatus& s
 RepStatus ProvideCheckpoint(RpcChannel& rpc,
                             const std::string& src_path,
                             const std::string& client_ip,
+                            int max_num_ranges,
                             int parallelism, 
                             int ops_timeout_msec,
                             int connect_timeout_msec,
@@ -214,7 +215,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
 {
   using namespace std::placeholders;
 
-  CheckpointProducer cp(src_path, client_ip,
+  CheckpointProducer cp(src_path, client_ip, max_num_ranges,
                         parallelism, ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>

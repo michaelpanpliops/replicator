@@ -14,7 +14,6 @@
 RepStatus ReplicateCheckpoint(RpcChannel& rpc,
                               int32_t shard,
                               const std::string &dst_path,
-                              int desired_num_of_threads,
                               int ops_timeout_msec,
                               int connect_timeout_msec,
                               IKvPairSerializer& kv_pair_serializer);

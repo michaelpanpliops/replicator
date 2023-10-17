@@ -17,6 +17,7 @@ static void PrintHelp() {
   std::cout << "Usage: server_exe -p path -a ip_addr -i parallelism" << std::endl;
   std::cout << "  -p the path to the db directory" << std::endl;
   std::cout << "  -a the ip address of the client" << std::endl;
+  std::cout << "  -n desired number of ranges" << std::endl;
   std::cout << "  -i internal iterator parallelism" << std::endl;
   std::cout << "  -ot operations timeout [msec] (optional, default: 60000)" << std::endl;
   std::cout << "  -ct connect timeout [msec] (optional, default: 60000)" << std::endl;
@@ -24,7 +25,7 @@ static void PrintHelp() {
 
 static void ParseArgs(int argc, char *argv[],
                       int& parallelism, std::string& path, std::string& ip,
-                      int& ops_timeout_msec, int& connect_timeout_msec) {
+                      int& max_num_ranges, int& ops_timeout_msec, int& connect_timeout_msec) {
   path.clear();
   ip.clear();
   char* endptr;
@@ -36,6 +37,11 @@ static void ParseArgs(int argc, char *argv[],
     }
     if (!strcmp("-a", argv[i]) && i+1 < argc) {
       ip = argv[++i];
+      continue;
+    }
+    if (!strcmp("-n", argv[i]) && i+1 < argc) {
+      max_num_ranges = std::strtol(argv[++i], &endptr, 10);
+      max_num_ranges = (*endptr == '\0' ? max_num_ranges : -1);
       continue;
     }
     if (!strcmp("-i", argv[i]) && i+1 < argc) {
@@ -63,7 +69,7 @@ static void ParseArgs(int argc, char *argv[],
   }
 
   if (parallelism < 0 || path.empty() || ip.empty()
-      || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
+      || max_num_ranges < 0 || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
     std::cout << "Wrong input parameters" << std::endl << std::endl;
     PrintHelp();
     exit(1);
@@ -74,15 +80,16 @@ int main(int argc, char* argv[]) {
   int parallelism;
   std::string src_path;
   std::string client_ip;
+  int max_num_ranges = -1;
   int ops_timeout_msec = 60000; // default timeout
   int connect_timeout_msec = 60000; // default timeout
   ParseArgs(argc, argv, parallelism, src_path, client_ip,
-            ops_timeout_msec, connect_timeout_msec);
+            max_num_ranges, ops_timeout_msec, connect_timeout_msec);
 
   logger.reset(new SimpleLogger());
   RpcChannel rpc(RpcChannel::Pier::Server, client_ip);
   KvPairSimpleSerializer kv_pair_serializer;
-  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, parallelism,
+  auto rc = ProvideCheckpoint(rpc, src_path, client_ip, max_num_ranges, parallelism,
                               ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, "ProvideCheckpoint failed\n");

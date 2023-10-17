@@ -13,6 +13,7 @@
 RepStatus ProvideCheckpoint(RpcChannel& rpc,
                             const std::string &src_path,
                             const std::string& client_ip,
+                            int max_num_ranges,
                             int parallelism,
                             int ops_timeout_msec,
                             int connect_timeout_msec,
@@ -21,7 +22,7 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
 class CheckpointProducer
 {
 public:
-  CheckpointProducer( const std::string& src_path, const std::string& client_ip,
+  CheckpointProducer(const std::string& src_path, const std::string& client_ip, int max_num_ranges,
                       int parallelism, int ops_timeout_msec, int connect_timeout_msec,
                       IKvPairSerializer& kv_pair_serializer);
   ~CheckpointProducer();
@@ -45,6 +46,7 @@ public:
 private:
   const std::string& src_path_;
   const std::string& client_ip_;
+  const int max_num_ranges_;
   const int parallelism_;
   uint32_t checkpoint_id_;
   std::string checkpoint_path_;

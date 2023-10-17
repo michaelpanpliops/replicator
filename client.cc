@@ -66,9 +66,9 @@ RepStatus CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint
 
 // Send start streaming request to the server
 RepStatus StartStreaming(RpcChannel &rpc, uint16_t port,
-                    uint32_t num_threads, ServerState& state)
+                    ServerState& state)
 {
-  StartStreamingRequest req{checkpoint_id_, num_threads, port };
+  StartStreamingRequest req{checkpoint_id_, port };
   StartStreamingResponse res{};
   auto rc = rpc.SendCommand(req, res);
   if (!rc.ok()) {
@@ -97,7 +97,6 @@ RepStatus GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs,
 
 // Main entry function 
 RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
-                              int desired_num_of_threads,
                               int ops_timeout_msec,
                               int connect_timeout_msec,
                               IKvPairSerializer& kv_pair_serializer)
@@ -145,7 +144,7 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   // RPC call: Tell server to start streaming
   ServerState server_status;
-  rc = StartStreaming(rpc, port, desired_num_of_threads, server_status);
+  rc = StartStreaming(rpc, port, server_status);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     return rc;
