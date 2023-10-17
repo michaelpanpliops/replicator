@@ -69,7 +69,7 @@ static void ParseArgs(int argc, char *argv[],
   }
 
   if (parallelism < 0 || path.empty() || ip.empty()
-      || max_num_ranges < 0 || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
+      || max_num_ranges <= 0 || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
     std::cout << "Wrong input parameters" << std::endl << std::endl;
     PrintHelp();
     exit(1);
