@@ -22,7 +22,10 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Send(const char* key, uint32_t
 {
   // Create the message
   std::vector<char> message;
-  kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
+  auto rc = kv_pair_serializer.Serialize(key, key_size, value, value_size, message);
+  if (!rc.IsOk()) {
+    return rc;
+  }
 
   // Send the size of the message
   uint32_t message_size = htonl(message.size());
@@ -108,8 +111,8 @@ RepStatus Connection<ConnectionType::TCP_SOCKET>::Receive(std::string& key, std:
     total_bytes_read += bytes_read;
   }
   // Parse the message
-  std::tie(key, value) = kv_pair_serializer.Deserialize(buffer, message_size);
-  return RepStatus();
+  auto rc = kv_pair_serializer.Deserialize(buffer, message_size, key, value);
+  return rc;
 }
 
 template<>

@@ -21,7 +21,7 @@ std::string StringFormatInternal(const std::string& format, Args&& ... args)
   int size_s = std::snprintf(nullptr, 0, format.data(), args ... ) + 1; // Extra byte for null terminator
 
   if( size_s <= 0 ) {
-      throw std::runtime_error( "Error during formatting." );
+     return "Error during string formatting." ;
   }
   auto size = static_cast<size_t>( size_s ); // Prevent compiled conversion warnings
 

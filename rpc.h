@@ -63,8 +63,10 @@ class RpcChannel {
 public:
   enum class Pier { Client, Server };
 
-  RpcChannel(Pier pier, const std::string& pier_ip);
+  RpcChannel() {};
   ~RpcChannel();
+
+  RepStatus Connect(Pier pier, const std::string& pier_ip);
 
   template<typename Tin, typename Tout>
   RepStatus SendCommand(const Tin& in, Tout& out)

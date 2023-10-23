@@ -81,10 +81,15 @@ int main(int argc, char* argv[]) {
             ops_timeout_msec, connect_timeout_msec);
 
   logger.reset(new SimpleLogger());
-  RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
+  RpcChannel rpc;
+  auto rc = rpc.Connect(RpcChannel::Pier::Client, server_ip);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("rpc failed: %s\n", rc.ToString()));
+    exit(1);
+  }
   KvPairSimpleSerializer kv_pair_serializer;
-  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path,
-                                ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
+  rc = ReplicateCheckpoint(rpc, shard, dsp_path,
+                          ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
   if (!rc.ok()) {
     Cleanup();
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
