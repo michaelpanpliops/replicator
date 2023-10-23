@@ -18,23 +18,22 @@ static void PrintHelp() {
   std::cout << "  -s the index of the shard" << std::endl;
   std::cout << "  -p the path to the replication directory" << std::endl;
   std::cout << "  -a the ip address of the server" << std::endl;
-  std::cout << "  -n desired number of threads" << std::endl;
-  std::cout << "  -t timeout [msec] (default: 50000)" << std::endl;
+  std::cout << "  -ot operations timeout [msec] (optional, default: 60000)" << std::endl;
+  std::cout << "  -ct connect timeout [msec] (optional, default: 60000)" << std::endl;
 }
 
-static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::string& path, std::string& ip, uint64_t& timeout_msec) {
-  shard = -1;
-  threads = -1;
+static void ParseArgs(int argc, char *argv[],
+                      int& shard,
+                      std::string& path, std::string& ip,
+                      int& ops_timeout_msec, int& connect_timeout_msec) {
   path.clear();
   ip.clear();
+  char* endptr;
 
   for (int i = 1; i < argc; ++i) {
     if (!strcmp("-s", argv[i]) && i+1 < argc) {
-      shard = atoi(argv[++i]);
-      continue;
-    }
-    if (!strcmp("-n", argv[i]) && i+1 < argc) {
-      threads = atoi(argv[++i]);
+      shard = std::strtol(argv[++i], &endptr, 10);
+      shard = (*endptr == '\0' ? shard : -1);
       continue;
     }
     if (!strcmp("-p", argv[i]) && i+1 < argc) {
@@ -45,8 +44,14 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
       ip = argv[++i];
       continue;
     }
-    if (!strcmp("-t", argv[i]) && i+1 < argc) {
-      timeout_msec = std::stoull(argv[++i]);
+    if (!strcmp("-ot", argv[i]) && i+1 < argc) {
+      ops_timeout_msec = std::strtol(argv[++i], &endptr, 10);
+      ops_timeout_msec = (*endptr == '\0' ? ops_timeout_msec : -1);
+      continue;
+    }
+    if (!strcmp("-ct", argv[i]) && i+1 < argc) {
+      connect_timeout_msec = std::strtol(argv[++i], &endptr, 10);
+      connect_timeout_msec = (*endptr == '\0' ? connect_timeout_msec : -1);
       continue;
     }
     if (!strcmp("-h", argv[i])) {
@@ -58,7 +63,9 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
     exit(1);
   }
 
-  if (shard < 0 || threads < 0 || path.empty() || ip.empty()) {
+  if (shard < 0 || path.empty() || ip.empty()
+      || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
+    std::cout << "Wrong input parameters" << std::endl << std::endl;
     PrintHelp();
     exit(1);
   }
@@ -66,22 +73,24 @@ static void ParseArgs(int argc, char *argv[], int& shard, int& threads, std::str
 
 int main(int argc, char* argv[]) {
   int shard;
-  int threads;
   std::string dsp_path;
   std::string server_ip;
-  uint64_t timeout_msec = 50000; // default timeout
-  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip, timeout_msec);
-  logger.reset(new SimpleLogger());
+  int ops_timeout_msec = 60000; // default timeout
+  int connect_timeout_msec = 60000; // default timeout
+  ParseArgs(argc, argv, shard, dsp_path, server_ip,
+            ops_timeout_msec, connect_timeout_msec);
 
+  logger.reset(new SimpleLogger());
   RpcChannel rpc;
   auto rc = rpc.Connect(RpcChannel::Pier::Client, server_ip);
-  if (!rc.IsOk()) {
+  if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("rpc failed: %s\n", rc.ToString()));
     exit(1);
   }
   KvPairSimpleSerializer kv_pair_serializer;
-  rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads, timeout_msec, kv_pair_serializer);
-  if (!rc.IsOk()) {
+  rc = ReplicateCheckpoint(rpc, shard, dsp_path,
+                          ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
+  if (!rc.ok()) {
     Cleanup();
     logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
     exit(1);
@@ -91,7 +100,7 @@ int main(int argc, char* argv[]) {
   while (!done) {
     std::this_thread::sleep_for(10s);
     rc = CheckReplicationStatus(rpc, done);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       Cleanup();
       logger->Log(Severity::ERROR, FormatString("CheckReplicationStatus failed\n"));
       exit(1);

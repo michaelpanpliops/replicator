@@ -1,5 +1,4 @@
-#ifndef KV_PAIR_SERIALIZER_H
-#define KV_PAIR_SERIALIZER_H
+#pragma once
 
 #include "pliops/status.h"
 
@@ -11,7 +10,7 @@ using RepStatus = Replicator::Status;
 
 class IKvPairSerializer {
 public:
-    virtual ~IKvPairSerializer() {}
+  virtual ~IKvPairSerializer() {}
 
     virtual RepStatus Serialize(const char* key, uint32_t key_size, const char* value, uint32_t value_size, std::vector<char>& buffer) = 0;
 
@@ -19,5 +18,3 @@ public:
 };
 
 }
-
-#endif // KV_PAIR_SERIALIZER_H

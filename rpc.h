@@ -39,7 +39,6 @@ struct CreateCheckpointResponse {
 
 struct StartStreamingRequest {
   uint32_t checkpoint_id;  
-  uint32_t max_num_of_threads;
   uint16_t consumer_port;
 };
 
@@ -94,7 +93,7 @@ public:
       return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Rpc: Recv failed: %d\n", errno));
     }
     auto rc = callback(in, out);
-    if (!rc.IsOk()) {
+    if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("Rpc: Send failed: callback\n"));
       return rc;
     }

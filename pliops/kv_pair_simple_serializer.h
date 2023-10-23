@@ -1,5 +1,4 @@
-#ifndef KV_PAIR_SIMPLE_SERIALIZER_H
-#define KV_PAIR_SIMPLE_SERIALIZER_H
+#pragma once
 
 #include "pliops/kv_pair_serializer.h"
 
@@ -12,5 +11,3 @@ public:
 };
 
 }
-
-#endif // KV_PAIR_SIMPLE_SERIALIZER_H

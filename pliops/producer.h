@@ -33,7 +33,8 @@ public:
   virtual ~Producer();
   RepStatus OpenShard(const std::string& shard_path);
   RepStatus Start(const std::string& ip, uint16_t port,
-            uint32_t max_num_of_threads, uint32_t parallelism, uint64_t timeout_msec,
+            uint32_t max_num_of_threads, uint32_t parallelism,
+            uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
             std::function<void(ProducerState, const RepStatus&)>& done_callback);
   RepStatus Stop();
   RepStatus GetState(ProducerState& state, RepStatus& status);
@@ -68,7 +69,8 @@ private:
 
   // Signal threads to exit
   std::atomic<bool> kill_;
-  uint64_t timeout_msec_;
+  uint32_t ops_timeout_msec_;
+  uint32_t connect_timeout_msec_;
 
   // Worker threads
   void ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id);
