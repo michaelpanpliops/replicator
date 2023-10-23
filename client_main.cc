@@ -18,13 +18,12 @@ static void PrintHelp() {
   std::cout << "  -s the index of the shard" << std::endl;
   std::cout << "  -p the path to the replication directory" << std::endl;
   std::cout << "  -a the ip address of the server" << std::endl;
-  std::cout << "  -n desired number of threads" << std::endl;
   std::cout << "  -ot operations timeout [msec] (optional, default: 60000)" << std::endl;
   std::cout << "  -ct connect timeout [msec] (optional, default: 60000)" << std::endl;
 }
 
 static void ParseArgs(int argc, char *argv[],
-                      int& shard, int& threads,
+                      int& shard,
                       std::string& path, std::string& ip,
                       int& ops_timeout_msec, int& connect_timeout_msec) {
   path.clear();
@@ -35,11 +34,6 @@ static void ParseArgs(int argc, char *argv[],
     if (!strcmp("-s", argv[i]) && i+1 < argc) {
       shard = std::strtol(argv[++i], &endptr, 10);
       shard = (*endptr == '\0' ? shard : -1);
-      continue;
-    }
-    if (!strcmp("-n", argv[i]) && i+1 < argc) {
-      threads = std::strtol(argv[++i], &endptr, 10);
-      threads = (*endptr == '\0' ? threads : -1);
       continue;
     }
     if (!strcmp("-p", argv[i]) && i+1 < argc) {
@@ -69,7 +63,7 @@ static void ParseArgs(int argc, char *argv[],
     exit(1);
   }
 
-  if (shard < 0 || threads < 0 || path.empty() || ip.empty()
+  if (shard < 0 || path.empty() || ip.empty()
       || ops_timeout_msec < 0 || connect_timeout_msec < 0) {
     std::cout << "Wrong input parameters" << std::endl << std::endl;
     PrintHelp();
@@ -79,18 +73,17 @@ static void ParseArgs(int argc, char *argv[],
 
 int main(int argc, char* argv[]) {
   int shard;
-  int threads;
   std::string dsp_path;
   std::string server_ip;
   int ops_timeout_msec = 60000; // default timeout
   int connect_timeout_msec = 60000; // default timeout
-  ParseArgs(argc, argv, shard, threads, dsp_path, server_ip,
+  ParseArgs(argc, argv, shard, dsp_path, server_ip,
             ops_timeout_msec, connect_timeout_msec);
 
   logger.reset(new SimpleLogger());
   RpcChannel rpc(RpcChannel::Pier::Client, server_ip);
   KvPairSimpleSerializer kv_pair_serializer;
-  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path, threads,
+  auto rc = ReplicateCheckpoint(rpc, shard, dsp_path,
                                 ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
   if (!rc.ok()) {
     Cleanup();
