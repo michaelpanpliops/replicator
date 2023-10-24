@@ -64,6 +64,6 @@ target_include_directories(server_exe PRIVATE ${XDPROCKS_INCLUDE_PATH})
 target_compile_definitions(server_exe PRIVATE ROCKSDB_NAMESPACE=xdprocks XDPROCKS)
 
 add_executable(rocksdb_server_exe ${SERVER_SOURCES})
-target_link_libraries(rocksdb_server_exe PRIVATE rocksdb ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(rocksdb_server_exe PRIVATE rocksdb ${CMAKE_THREAD_LIBS_INIT} -ldl -lz -lsnappy -lbz2)
 target_include_directories(rocksdb_server_exe PRIVATE ${ROCKSDB_INCLUDE_PATH})
 target_compile_definitions(rocksdb_server_exe PRIVATE ROCKSDB_NAMESPACE=rocksdb)

@@ -95,13 +95,16 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     value = iterator->value();
 
     if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, ops_timeout_msec_)) {
+      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       // We must release the iterator here, otherwise DB::Close will crash
 #ifdef XDPROCKS
-      iterator->Close();
+      status = iterator->Close();
+      if (!status.ok()) {
+        logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
+      }
 #endif
       delete iterator;
 
-      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
       return;
     }
