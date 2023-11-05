@@ -13,7 +13,6 @@
 namespace Replicator {
 
 using ConsumerState = Replicator::State;
-using DBStatus = ROCKSDB_NAMESPACE::Status;
 using RepStatus = Replicator::Status;
 
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;

@@ -6,8 +6,6 @@
 #include "rocksdb/utilities/checkpoint.h"
 
 
-using namespace ROCKSDB_NAMESPACE;
-
 namespace {
 // For the sake of the example we use hardcoded checkpoint name
 uint32_t GetUniqueCheckpointName() { return 12345; }
@@ -45,9 +43,11 @@ RepStatus CheckpointProducer::CreateCheckpoint(
   options.create_if_missing = false;
   options.error_if_exists = false;
   options.disable_auto_compactions = true;
-  options.pliops_db_options.graceful_close_timeout_sec = 0;
+#ifdef XDPROCKS
   options.OptimizeForXdpRocks();
-  auto s = DB::Open(options, shard_path, &db);
+  options.pliops_db_options.graceful_close_timeout_sec = 0;
+#endif
+  auto s = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("DB::Open failed: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DB::Open failed: %s", s.ToString()));
@@ -55,8 +55,8 @@ RepStatus CheckpointProducer::CreateCheckpoint(
   std::unique_ptr<ROCKSDB_NAMESPACE::DB> db_ptr(db); // guarantee db deletion
 
   // Create a checkpoint
-  Checkpoint* checkpoint_creator = nullptr;
-  s = Checkpoint::Create(db, &checkpoint_creator);
+  ROCKSDB_NAMESPACE::Checkpoint* checkpoint_creator = nullptr;
+  s = ROCKSDB_NAMESPACE::Checkpoint::Create(db, &checkpoint_creator);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("Error in Checkpoint::Create: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in Checkpoint::Create: %s", s.ToString()));
@@ -180,7 +180,7 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   }
 
   // Destroy the checkpoint
-  auto s = DestroyDB(checkpoint_path_, Options());
+  auto s = ROCKSDB_NAMESPACE::DestroyDB(checkpoint_path_, ROCKSDB_NAMESPACE::Options());
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("DestroyDB failed to destroy checkpoint: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed to destroy checkpoint: %s", s.ToString()));

@@ -26,11 +26,9 @@ RepStatus Producer::OpenShard(const std::string& shard_path)
   options.create_if_missing = false;
   options.error_if_exists = false;
   options.disable_auto_compactions = true;
-#ifndef LEGACY_ROCKSDB_SENDER
+#ifdef XDPROCKS
   options.OptimizeForXdpRocks();
   options.pliops_db_options.graceful_close_timeout_sec = 0;
-#else
-  // Tune legacy RocksDB options here
 #endif
   auto status = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!status.ok()) {
@@ -61,9 +59,11 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   }
 
   // Create iterator with internal parallelism
-  ReadOptions read_opts;
+  ROCKSDB_NAMESPACE::ReadOptions read_opts;
+#ifdef XDPROCKS
   read_opts.iterator_internal_parallelism_enabled = true; // default is false
   read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor;
+#endif
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
     logger->Log(Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
@@ -95,11 +95,16 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     value = iterator->value();
 
     if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, ops_timeout_msec_)) {
+      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       // We must release the iterator here, otherwise DB::Close will crash
+#ifdef XDPROCKS
       status = iterator->Close();
+      if (!status.ok()) {
+        logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
+      }
+#endif
       delete iterator;
 
-      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
       return;
     }
@@ -113,7 +118,9 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   logger->Log(Severity::INFO, FormatString("Reader thread #%d ended. Performed %lld operations.\n", thread_id, total_number_of_operations));
 
   // Release the iterator
+#ifdef XDPROCKS
   status = iterator->Close();
+#endif
   delete iterator;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
