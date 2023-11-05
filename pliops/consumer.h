@@ -16,7 +16,7 @@ using ConsumerState = Replicator::State;
 using RepStatus = Replicator::Status;
 
 using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
-constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
+constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 1024;
 
 struct Statistics {
   std::atomic<uint64_t> num_kv_pairs = 0;

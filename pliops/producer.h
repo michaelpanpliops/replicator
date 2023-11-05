@@ -18,8 +18,16 @@ using ProducerState = Replicator::State;
 using RepStatus = Replicator::Status;
 
 using RangeType = std::pair<std::optional<std::string>, std::optional<std::string>>;
-using MessageQueue = moodycamel::BlockingConcurrentQueue<std::pair<std::string, std::string>>;
-constexpr size_t MESSAGE_QUEUE_CAPACITY = 32 * 10000;
+constexpr size_t MAX_PRODUCERS_NUMBER = 16;
+constexpr size_t PRODUCER_QUEUE_BLOCKS = 1024 * 1024;
+constexpr size_t PRODUCER_QUEUE_CAPACITY = PRODUCER_QUEUE_BLOCKS * moodycamel::ConcurrentQueueDefaultTraits::BLOCK_SIZE;
+constexpr size_t MESSAGE_QUEUE_CAPACITY = MAX_PRODUCERS_NUMBER * PRODUCER_QUEUE_CAPACITY;
+class ConcurrentQueueReplicatorTraits : public moodycamel::ConcurrentQueueDefaultTraits {
+  public:
+    static const size_t INITIAL_IMPLICIT_PRODUCER_HASH_SIZE = MAX_PRODUCERS_NUMBER;
+    static const size_t IMPLICIT_INITIAL_INDEX_SIZE = PRODUCER_QUEUE_BLOCKS;
+};
+using MessageQueue = moodycamel::BlockingConcurrentQueue<std::pair<std::string, std::string>, ConcurrentQueueReplicatorTraits>;
 
 struct Statistics {
   std::atomic<uint64_t> num_kv_pairs = 0;
