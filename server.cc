@@ -151,8 +151,27 @@ RepStatus CheckpointProducer::GetStatus(
     return rc;
   }
 
-  // Update the client_done_
-  client_done_ = IsFinalState(res.state);
+  server_done_ = IsFinalState(res.state);
+  client_done_ = IsFinalState(req.state);
+
+  return RepStatus();
+}
+
+RepStatus CheckpointProducer::EndReplication(const EndReplicationRequest& req, EndReplicationResponse& res)
+{
+  // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
+  if (req.checkpoint_id != checkpoint_id_) {
+    logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
+  }
+
+  // Get producer state
+  RepStatus status;
+  auto rc = producer_->GetState(res.state, status);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("Producer::GetState failed\n"));
+    return rc;
+  }
 
   return RepStatus();
 }
@@ -236,12 +255,20 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
 
   std::function<RepStatus(const GetStatusRequest&, GetStatusResponse&)>
     get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
-  while(!cp.IsClientDone()) {
+  while(!cp.IsClientDone() && !cp.IsServerDone()) {
     rc = rpc.ProcessCommand(get_status_cb);
     if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("CheckpointProducer::GetStatus failed\n"));
       return rc;
     }
+  }
+
+  std::function<RepStatus(const EndReplicationRequest&, EndReplicationResponse&)>
+    end_replication_cb = std::bind(&CheckpointProducer::EndReplication, &cp, _1, _2); 
+  rc = rpc.ProcessCommand(end_replication_cb);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("CheckpointProducer::EndReplication failed\n"));
+    return rc;
   }
 
   // Wait till the producer is done.

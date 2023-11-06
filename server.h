@@ -31,13 +31,16 @@ public:
   RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
   RepStatus StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
   RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
+  RepStatus EndReplication(const EndReplicationRequest& req, EndReplicationResponse& res);
 
   // Synchronization and cleanup
   void ReplicationDone(ProducerState state, const RepStatus&);
   RepStatus WaitForCompletion(uint32_t timeout_msec);
   RepStatus DestroyCheckpoint();
 
-  // The client_done_ is set to true after sending to the client ERROR, DONE, STOPPED
+  // The server_done_ is set to true after sending to the client ERROR, DONE, STOPPED
+  bool IsServerDone() { return server_done_; };
+  // The client_done_ is set to true after receiving from the the client ERROR, DONE, STOPPED
   bool IsClientDone() { return client_done_; };
 
   const int ops_timeout_msec_;
@@ -50,6 +53,7 @@ private:
   const int parallelism_;
   uint32_t checkpoint_id_;
   std::string checkpoint_path_;
+  bool server_done_ = false;
   bool client_done_ = false;
 
   // Producer state is updated in the ReplicationDone callback

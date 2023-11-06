@@ -107,6 +107,13 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  rc = EndReplication(rpc);
+  if (!rc.ok()) {
+    Cleanup();
+    logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
+    exit(1);
+  }
+
   logger->Log(Severity::INFO, "All done!\n");
   return 0;
 }

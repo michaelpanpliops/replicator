@@ -80,18 +80,33 @@ RepStatus StartStreaming(RpcChannel &rpc, uint16_t port,
 }
 
 // Send status request to the server
-RepStatus GetStatus(RpcChannel& rpc, ServerState& state, uint64_t& num_kv_pairs, uint64_t& num_bytes)
+RepStatus GetStatus(RpcChannel& rpc, ClientState& client_state, ServerState& server_state,
+                    uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
-  GetStatusRequest req{checkpoint_id_};
+  GetStatusRequest req{checkpoint_id_, client_state};
   GetStatusResponse res;
   auto rc = rpc.SendCommand(req, res);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("rpc.SendCommand failed\n"));
     return rc;
   }
-  state = res.state;
+  server_state = res.state;
   num_kv_pairs = res.num_kv_pairs;
   num_bytes = res.num_bytes;
+  return RepStatus();
+}
+
+// Send end-replication request to the server
+RepStatus End(RpcChannel& rpc, ServerState& state)
+{
+  EndReplicationRequest req{checkpoint_id_};
+  EndReplicationResponse res;
+  auto rc = rpc.SendCommand(req, res);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("rpc.SendCommand failed\n"));
+    return rc;
+  }
+  state = res.state;
   return RepStatus();
 }
 
@@ -203,7 +218,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // RPC call: get replication status from server
   ServerState server_state;
   uint64_t server_num_kv_pairs, server_num_bytes;
-  rc = GetStatus(rpc, server_state, server_num_kv_pairs, server_num_bytes);
+  rc = GetStatus(rpc, consumer_state, server_state, server_num_kv_pairs, server_num_bytes);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("GetStatus failed\n"));
     return rc;
@@ -216,7 +231,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
 
 #define CHECK_SERVER_STATE 
 #ifdef CHECK_SERVER_STATE
-  // Cleanup and return if the server it is done
+  // Cleanup and return if the server is done
   if (IsFinalState(server_state) && !done) {
     // Wait for consumer to complete
     auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
@@ -235,6 +250,24 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     done = true;
   }
 #endif
+
+  return RepStatus();
+}
+
+RepStatus EndReplication(RpcChannel& rpc)
+{
+  ServerState server_state;
+  auto rc = End(rpc, server_state);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("EndReplication failed\n"));
+    return rc;
+  }
+
+  logger->Log(Severity::INFO, FormatString("Server state = %s\n", ToString(server_state)));
+  if (!IsFinalState(server_state)) {
+    logger->Log(Severity::ERROR, FormatString("EndReplication - server has not finished replication\n"));
+    return rc;
+  }
 
   return RepStatus();
 }

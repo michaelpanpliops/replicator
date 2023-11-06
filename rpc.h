@@ -25,6 +25,7 @@
 using namespace Replicator;
 
 using ServerState = Replicator::State;
+using ClientState = Replicator::State;
 using RepStatus = Replicator::Status;
 
 #pragma pack(push, 0)
@@ -48,12 +49,21 @@ struct StartStreamingResponse {
 
 struct GetStatusRequest {
   uint32_t checkpoint_id;
+  ClientState state;
 };
 
 struct GetStatusResponse {
   ServerState state;
   uint64_t num_kv_pairs;
   uint64_t num_bytes;
+};
+
+struct EndReplicationRequest {
+  uint32_t checkpoint_id;
+};
+
+struct EndReplicationResponse {
+  ServerState state;
 };
 
 #pragma pack(pop)
