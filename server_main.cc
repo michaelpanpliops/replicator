@@ -94,10 +94,10 @@ int main(int argc, char* argv[]) {
     exit(1);
   }
   KvPairSimpleSerializer kv_pair_serializer;
-  rc = ProvideCheckpoint(rpc, src_path, client_ip, max_num_ranges, parallelism,
+  rc = RunReplicationServer(rpc, src_path, client_ip, max_num_ranges, parallelism,
                          ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, "ProvideCheckpoint failed\n");
+    logger->Log(Severity::ERROR, "RunReplicationServer failed\n");
     exit(1);
   }
 

@@ -50,8 +50,8 @@ RepStatus CheckpointConsumer::WaitForCompletion(uint32_t timeout_msec)
   return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
 }
 
-// Send checkpoint request to the server
-RepStatus CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id)
+// Send begin-replication request to the server
+RepStatus BeginReplicationRpc(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint_id)
 {
   CreateCheckpointRequest req{shard};
   CreateCheckpointResponse res{};
@@ -65,7 +65,7 @@ RepStatus CreateCheckpoint(RpcChannel &rpc, uint32_t shard, uint32_t& checkpoint
 }
 
 // Send start streaming request to the server
-RepStatus StartStreaming(RpcChannel &rpc, uint16_t port,
+RepStatus StartReplicationStreamingRpc(RpcChannel &rpc, uint16_t port,
                     ServerState& state)
 {
   StartStreamingRequest req{checkpoint_id_, port };
@@ -80,7 +80,7 @@ RepStatus StartStreaming(RpcChannel &rpc, uint16_t port,
 }
 
 // Send status request to the server
-RepStatus GetStatus(RpcChannel& rpc, ClientState& client_state, ServerState& server_state,
+RepStatus GetReplicationStatusRpc(RpcChannel& rpc, ClientState& client_state, ServerState& server_state,
                     uint64_t& num_kv_pairs, uint64_t& num_bytes)
 {
   GetStatusRequest req{checkpoint_id_, client_state};
@@ -97,7 +97,7 @@ RepStatus GetStatus(RpcChannel& rpc, ClientState& client_state, ServerState& ser
 }
 
 // Send end-replication request to the server
-RepStatus End(RpcChannel& rpc, ServerState& state)
+RepStatus EndReplicatonRpc(RpcChannel& rpc, ServerState& state)
 {
   EndReplicationRequest req{checkpoint_id_};
   EndReplicationResponse res;
@@ -111,16 +111,16 @@ RepStatus End(RpcChannel& rpc, ServerState& state)
 }
 
 // Main entry function 
-RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
+RepStatus BeginReplication(RpcChannel& rpc, int32_t shard, const std::string &dst_path,
                               int ops_timeout_msec,
                               int connect_timeout_msec,
                               IKvPairSerializer& kv_pair_serializer)
 {
   // RPC call: request checkpoint from the server
   uint32_t checkpoint_id;
-  auto rc = CreateCheckpoint(rpc, shard, checkpoint_id);
+  auto rc = BeginReplicationRpc(rpc, shard, checkpoint_id);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
+    logger->Log(Severity::ERROR, FormatString("BeginReplicationRpc failed\n"));
     return rc;
   }
 
@@ -159,15 +159,15 @@ RepStatus ReplicateCheckpoint(RpcChannel& rpc, int32_t shard, const std::string 
 
   // RPC call: Tell server to start streaming
   ServerState server_status;
-  rc = StartStreaming(rpc, port, server_status);
+  rc = StartReplicationStreamingRpc(rpc, port, server_status);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
+    logger->Log(Severity::ERROR, FormatString("StartReplicationStreamingRpc failed\n"));
     return rc;
   }
 
   if (server_status != ServerState::IN_PROGRESS) {
-    logger->Log(Severity::ERROR, FormatString("Server responded with error to StartStreaming\n"));
-    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartStreaming"));
+    logger->Log(Severity::ERROR, FormatString("Server responded with error to StartReplicationStreamingRpc\n"));
+    return RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Server responded with error to StartReplicationStreamingRpc"));
   }
 
   return RepStatus();
@@ -218,9 +218,9 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
   // RPC call: get replication status from server
   ServerState server_state;
   uint64_t server_num_kv_pairs, server_num_bytes;
-  rc = GetStatus(rpc, consumer_state, server_state, server_num_kv_pairs, server_num_bytes);
+  rc = GetReplicationStatusRpc(rpc, consumer_state, server_state, server_num_kv_pairs, server_num_bytes);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("GetStatus failed\n"));
+    logger->Log(Severity::ERROR, FormatString("GetReplicationStatusRpc failed\n"));
     return rc;
   }
 
@@ -237,7 +237,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
     auto timeout_msec = std::max(consumer_->ops_timeout_msec_, consumer_->connect_timeout_msec_) + 1000;
     rc = consumer_->WaitForCompletion(timeout_msec);
     if (!rc.ok()) {
-      logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
+      logger->Log(Severity::ERROR, FormatString("ReplicationServer::WaitForCompletion failed\n"));
       return rc;
     }
 
@@ -257,7 +257,7 @@ RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done)
 RepStatus EndReplication(RpcChannel& rpc)
 {
   ServerState server_state;
-  auto rc = End(rpc, server_state);
+  auto rc = EndReplicatonRpc(rpc, server_state);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("EndReplication failed\n"));
     return rc;

@@ -11,7 +11,7 @@
 #include "pliops/status.h"
 
 
-RepStatus ReplicateCheckpoint(RpcChannel& rpc,
+RepStatus BeginReplication(RpcChannel& rpc,
                               int32_t shard,
                               const std::string &dst_path,
                               int ops_timeout_msec,

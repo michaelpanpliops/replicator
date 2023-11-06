@@ -10,7 +10,8 @@
 
 
 // The main function for shard replication
-RepStatus ProvideCheckpoint(RpcChannel& rpc,
+RepStatus RunReplicationServer(
+                            RpcChannel& rpc,
                             const std::string &src_path,
                             const std::string& client_ip,
                             int max_num_ranges,
@@ -19,19 +20,19 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
                             int connect_timeout_msec,
                             IKvPairSerializer& kv_pair_serializer);
 
-class CheckpointProducer
+class ReplicationServer
 {
 public:
-  CheckpointProducer(const std::string& src_path, const std::string& client_ip, int max_num_ranges,
+  ReplicationServer(const std::string& src_path, const std::string& client_ip, int max_num_ranges,
                       int parallelism, int ops_timeout_msec, int connect_timeout_msec,
                       IKvPairSerializer& kv_pair_serializer);
-  ~CheckpointProducer();
+  ~ReplicationServer();
 
   // Client requests processing methods
-  RepStatus CreateCheckpoint(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
-  RepStatus StartStreaming(const StartStreamingRequest& req, StartStreamingResponse& res);
-  RepStatus GetStatus(const GetStatusRequest& req, GetStatusResponse& res);
-  RepStatus EndReplication(const EndReplicationRequest& req, EndReplicationResponse& res);
+  RepStatus BeginReplicationRpc(const CreateCheckpointRequest& req, CreateCheckpointResponse& res);
+  RepStatus StartReplicationStreamingRpc(const StartStreamingRequest& req, StartStreamingResponse& res);
+  RepStatus GetReplicationStatusRpc(const GetStatusRequest& req, GetStatusResponse& res);
+  RepStatus EndReplicationRpc(const EndReplicationRequest& req, EndReplicationResponse& res);
 
   // Synchronization and cleanup
   void ReplicationDone(ProducerState state, const RepStatus&);
