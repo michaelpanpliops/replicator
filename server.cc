@@ -236,11 +236,11 @@ RepStatus RunReplicationServer(
 {
   using namespace std::placeholders;
 
-  ReplicationServer cp(src_path, client_ip, max_num_ranges,
+  ReplicationServer rs(src_path, client_ip, max_num_ranges,
                         parallelism, ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
-    create_checkpoint_cb = std::bind(&ReplicationServer::BeginReplicationRpc, &cp, _1, _2); 
+    create_checkpoint_cb = std::bind(&ReplicationServer::BeginReplicationRpc, &rs, _1, _2); 
   auto rc = rpc.ProcessCommand(create_checkpoint_cb);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicationServer::BeginReplicationRpc failed\n"));
@@ -248,7 +248,7 @@ RepStatus RunReplicationServer(
   }
 
   std::function<RepStatus(const StartStreamingRequest&, StartStreamingResponse&)>
-    start_streaming_cb = std::bind(&ReplicationServer::StartReplicationStreamingRpc, &cp, _1, _2); 
+    start_streaming_cb = std::bind(&ReplicationServer::StartReplicationStreamingRpc, &rs, _1, _2); 
   rc = rpc.ProcessCommand(start_streaming_cb);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicationServer::StartReplicationStreamingRpc failed\n"));
@@ -256,8 +256,8 @@ RepStatus RunReplicationServer(
   }
 
   std::function<RepStatus(const GetStatusRequest&, GetStatusResponse&)>
-    get_status_cb = std::bind(&ReplicationServer::GetReplicationStatusRpc, &cp, _1, _2); 
-  while(!cp.IsClientDone() && !cp.IsServerDone()) {
+    get_status_cb = std::bind(&ReplicationServer::GetReplicationStatusRpc, &rs, _1, _2); 
+  while(!rs.IsClientDone() && !rs.IsServerDone()) {
     rc = rpc.ProcessCommand(get_status_cb);
     if (!rc.ok()) {
       logger->Log(Severity::ERROR, FormatString("ReplicationServer::GetReplicationStatusRpc failed\n"));
@@ -266,7 +266,7 @@ RepStatus RunReplicationServer(
   }
 
   std::function<RepStatus(const EndReplicationRequest&, EndReplicationResponse&)>
-    end_replication_cb = std::bind(&ReplicationServer::EndReplicationRpc, &cp, _1, _2); 
+    end_replication_cb = std::bind(&ReplicationServer::EndReplicationRpc, &rs, _1, _2); 
   rc = rpc.ProcessCommand(end_replication_cb);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicationServer::EndReplicationRpc failed\n"));
@@ -274,13 +274,13 @@ RepStatus RunReplicationServer(
   }
 
   // Wait till the producer is done.
-  auto timeout_msec = std::max(cp.ops_timeout_msec_, cp.connect_timeout_msec_) + 1000;
-  auto wait_rc = cp.WaitForCompletion(timeout_msec);
+  auto timeout_msec = std::max(rs.ops_timeout_msec_, rs.connect_timeout_msec_) + 1000;
+  auto wait_rc = rs.WaitForCompletion(timeout_msec);
   if (!wait_rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicationServer::WaitForCompletion failed\n"));
   }
 
-  rc = cp.DestroyCheckpoint();
+  rc = rs.DestroyCheckpoint();
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, FormatString("ReplicationServer::DestroyCheckpoint failed\n"));
     return rc;
