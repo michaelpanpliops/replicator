@@ -88,11 +88,11 @@ int main(int argc, char* argv[]) {
     exit(1);
   }
   KvPairSimpleSerializer kv_pair_serializer;
-  rc = ReplicateCheckpoint(rpc, shard, dsp_path,
+  rc = BeginReplication(rpc, shard, dsp_path,
                           ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
   if (!rc.ok()) {
     Cleanup();
-    logger->Log(Severity::ERROR, FormatString("ReplicateCheckpoint failed\n"));
+    logger->Log(Severity::ERROR, FormatString("BeginReplication failed\n"));
     exit(1);
   }
 
@@ -105,6 +105,13 @@ int main(int argc, char* argv[]) {
       logger->Log(Severity::ERROR, FormatString("CheckReplicationStatus failed\n"));
       exit(1);
     }
+  }
+
+  rc = EndReplication(rpc);
+  if (!rc.ok()) {
+    Cleanup();
+    logger->Log(Severity::ERROR, FormatString("EndReplication failed\n"));
+    exit(1);
   }
 
   logger->Log(Severity::INFO, "All done!\n");

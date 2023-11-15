@@ -11,7 +11,7 @@ namespace {
 uint32_t GetUniqueCheckpointName() { return 12345; }
 }
 
-CheckpointProducer::CheckpointProducer(
+ReplicationServer::ReplicationServer(
   const std::string &src_path, const std::string& client_ip, int max_num_ranges,
   int parallelism, int ops_timeout_msec, int connect_timeout_msec,
   IKvPairSerializer& kv_pair_serializer)
@@ -21,17 +21,17 @@ CheckpointProducer::CheckpointProducer(
   producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
 }
 
-CheckpointProducer::~CheckpointProducer()
+ReplicationServer::~ReplicationServer()
 {
   DestroyCheckpoint();
 }
 
-// Process create-checkpoint request
-RepStatus CheckpointProducer::CreateCheckpoint(
+// Process begin-replication request
+RepStatus ReplicationServer::BeginReplicationRpc(
                           const CreateCheckpointRequest& req,
                           CreateCheckpointResponse& res)
 {
-  logger->Log(Severity::INFO, FormatString("CreateCheckpoint: shard=%d\n", req.shard_number));
+  logger->Log(Severity::INFO, FormatString("BeginReplicationRpc: shard=%d\n", req.shard_number));
 
   // Path to the db
   std::string shard_path = std::filesystem::path(src_path_)/std::to_string(req.shard_number);
@@ -94,14 +94,14 @@ RepStatus CheckpointProducer::CreateCheckpoint(
 }
 
 // Process start-streaming request
-RepStatus CheckpointProducer::StartStreaming(
+RepStatus ReplicationServer::StartReplicationStreamingRpc(
                           const StartStreamingRequest& req,
                           StartStreamingResponse& res)
 {
-  logger->Log(Severity::INFO, FormatString("StartStreaming: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
+  logger->Log(Severity::INFO, FormatString("StartReplicationStreamingRpc: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
                 client_ip_.c_str(), req.checkpoint_id, req.consumer_port, max_num_ranges_));
 
-  // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
+  // We expect to get the same checkpoint_id as we provided in the BeginReplicationRpc call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
     return RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
@@ -110,7 +110,7 @@ RepStatus CheckpointProducer::StartStreaming(
   // Bind ReplicationDone callback
   using namespace std::placeholders;
   std::function<void(ProducerState, const RepStatus&)> done_cb =
-    std::bind(&CheckpointProducer::ReplicationDone, this, _1, _2); 
+    std::bind(&ReplicationServer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
   RepStatus rc = producer_->Start(client_ip_, req.consumer_port, max_num_ranges_,
@@ -126,11 +126,11 @@ RepStatus CheckpointProducer::StartStreaming(
 }
 
 // Process get-status request
-RepStatus CheckpointProducer::GetStatus(
+RepStatus ReplicationServer::GetReplicationStatusRpc(
                           const GetStatusRequest& req,
                           GetStatusResponse& res)
 {
-  // We expect to get the same checkpoint_id as we provided in the CreateCheckpoint call
+  // We expect to get the same checkpoint_id as we provided in the BeginReplicationRpc call
   if (req.checkpoint_id != checkpoint_id_) {
     logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
@@ -151,13 +151,33 @@ RepStatus CheckpointProducer::GetStatus(
     return rc;
   }
 
-  // Update the client_done_
-  client_done_ = IsFinalState(res.state);
+  server_done_ = IsFinalState(res.state);
+  client_done_ = IsFinalState(req.state);
 
   return RepStatus();
 }
 
-RepStatus CheckpointProducer::WaitForCompletion(uint32_t timeout_msec)
+// Process end-replication request
+RepStatus ReplicationServer::EndReplicationRpc(const EndReplicationRequest& req, EndReplicationResponse& res)
+{
+  // We expect to get the same checkpoint_id as we provided in the BeginReplicationRpc call
+  if (req.checkpoint_id != checkpoint_id_) {
+    logger->Log(Severity::ERROR, FormatString("Invalid checkpoint id\n"));
+    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Invalid checkpoint id"));
+  }
+
+  // Get producer state
+  RepStatus status;
+  auto rc = producer_->GetState(res.state, status);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("Producer::GetState failed\n"));
+    return rc;
+  }
+
+  return RepStatus();
+}
+
+RepStatus ReplicationServer::WaitForCompletion(uint32_t timeout_msec)
 {
   using namespace std::literals;
 
@@ -171,7 +191,7 @@ RepStatus CheckpointProducer::WaitForCompletion(uint32_t timeout_msec)
   return rc ? RepStatus() : RepStatus(Code::REPLICATOR_FAILURE, Severity::ERROR, "WaitForCompletion failed.");
 }
 
-RepStatus CheckpointProducer::DestroyCheckpoint() {
+RepStatus ReplicationServer::DestroyCheckpoint() {
   // Cleanup producer
   auto rc = producer_->Stop();
   if (!rc.ok()) {
@@ -189,7 +209,7 @@ RepStatus CheckpointProducer::DestroyCheckpoint() {
   return RepStatus();
 }
 
-void CheckpointProducer::ReplicationDone(ProducerState state, const RepStatus& status)
+void ReplicationServer::ReplicationDone(ProducerState state, const RepStatus& status)
 {
   // Only mark here that the replication is done
   // The cleanup must be done a different thread (we cannot join threads from themself)
@@ -204,7 +224,8 @@ void CheckpointProducer::ReplicationDone(ProducerState state, const RepStatus& s
   producer_state_cv_.notify_all();
 }
 
-RepStatus ProvideCheckpoint(RpcChannel& rpc,
+RepStatus RunReplicationServer(
+                            RpcChannel& rpc,
                             const std::string& src_path,
                             const std::string& client_ip,
                             int max_num_ranges,
@@ -215,45 +236,53 @@ RepStatus ProvideCheckpoint(RpcChannel& rpc,
 {
   using namespace std::placeholders;
 
-  CheckpointProducer cp(src_path, client_ip, max_num_ranges,
+  ReplicationServer rs(src_path, client_ip, max_num_ranges,
                         parallelism, ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
 
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
-    create_checkpoint_cb = std::bind(&CheckpointProducer::CreateCheckpoint, &cp, _1, _2); 
+    create_checkpoint_cb = std::bind(&ReplicationServer::BeginReplicationRpc, &rs, _1, _2); 
   auto rc = rpc.ProcessCommand(create_checkpoint_cb);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("CheckpointProducer::CreateCheckpoint failed\n"));
+    logger->Log(Severity::ERROR, FormatString("ReplicationServer::BeginReplicationRpc failed\n"));
     return rc;
   }
 
   std::function<RepStatus(const StartStreamingRequest&, StartStreamingResponse&)>
-    start_streaming_cb = std::bind(&CheckpointProducer::StartStreaming, &cp, _1, _2); 
+    start_streaming_cb = std::bind(&ReplicationServer::StartReplicationStreamingRpc, &rs, _1, _2); 
   rc = rpc.ProcessCommand(start_streaming_cb);
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("CheckpointProducer::StartStreaming failed\n"));
+    logger->Log(Severity::ERROR, FormatString("ReplicationServer::StartReplicationStreamingRpc failed\n"));
     return rc;
   }
 
   std::function<RepStatus(const GetStatusRequest&, GetStatusResponse&)>
-    get_status_cb = std::bind(&CheckpointProducer::GetStatus, &cp, _1, _2); 
-  while(!cp.IsClientDone()) {
+    get_status_cb = std::bind(&ReplicationServer::GetReplicationStatusRpc, &rs, _1, _2); 
+  while(!rs.IsClientDone() && !rs.IsServerDone()) {
     rc = rpc.ProcessCommand(get_status_cb);
     if (!rc.ok()) {
-      logger->Log(Severity::ERROR, FormatString("CheckpointProducer::GetStatus failed\n"));
+      logger->Log(Severity::ERROR, FormatString("ReplicationServer::GetReplicationStatusRpc failed\n"));
       return rc;
     }
   }
 
-  // Wait till the producer is done.
-  auto timeout_msec = std::max(cp.ops_timeout_msec_, cp.connect_timeout_msec_) + 1000;
-  auto wait_rc = cp.WaitForCompletion(timeout_msec);
-  if (!wait_rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("CheckpointProducer::WaitForCompletion failed\n"));
+  std::function<RepStatus(const EndReplicationRequest&, EndReplicationResponse&)>
+    end_replication_cb = std::bind(&ReplicationServer::EndReplicationRpc, &rs, _1, _2); 
+  rc = rpc.ProcessCommand(end_replication_cb);
+  if (!rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("ReplicationServer::EndReplicationRpc failed\n"));
+    return rc;
   }
 
-  rc = cp.DestroyCheckpoint();
+  // Wait till the producer is done.
+  auto timeout_msec = std::max(rs.ops_timeout_msec_, rs.connect_timeout_msec_) + 1000;
+  auto wait_rc = rs.WaitForCompletion(timeout_msec);
+  if (!wait_rc.ok()) {
+    logger->Log(Severity::ERROR, FormatString("ReplicationServer::WaitForCompletion failed\n"));
+  }
+
+  rc = rs.DestroyCheckpoint();
   if (!rc.ok()) {
-    logger->Log(Severity::ERROR, FormatString("CheckpointProducer::DestroyCheckpoint failed\n"));
+    logger->Log(Severity::ERROR, FormatString("ReplicationServer::DestroyCheckpoint failed\n"));
     return rc;
   }
 

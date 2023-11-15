@@ -11,13 +11,14 @@
 #include "pliops/status.h"
 
 
-RepStatus ReplicateCheckpoint(RpcChannel& rpc,
+RepStatus BeginReplication(RpcChannel& rpc,
                               int32_t shard,
                               const std::string &dst_path,
                               int ops_timeout_msec,
                               int connect_timeout_msec,
                               IKvPairSerializer& kv_pair_serializer);
 RepStatus CheckReplicationStatus(RpcChannel& rpc, bool& done);
+RepStatus EndReplication(RpcChannel& rpc);
 void Cleanup();
 
 class CheckpointConsumer
