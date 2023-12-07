@@ -12,10 +12,10 @@ uint32_t GetUniqueCheckpointName() { return 12345; }
 }
 
 ReplicationServer::ReplicationServer(
-  const std::string &src_path, const std::string& client_ip, int max_num_ranges,
+  const std::string &src_path, const std::string& client_ip,
   int parallelism, int ops_timeout_msec, int connect_timeout_msec,
   IKvPairSerializer& kv_pair_serializer)
-  : src_path_(src_path), client_ip_(client_ip), max_num_ranges_(max_num_ranges), parallelism_(parallelism)
+  : src_path_(src_path), client_ip_(client_ip), parallelism_(parallelism)
   , ops_timeout_msec_(ops_timeout_msec), connect_timeout_msec_(connect_timeout_msec)
 {
   producer_ = std::make_unique<Replicator::Producer>(kv_pair_serializer);
@@ -31,11 +31,8 @@ RepStatus ReplicationServer::BeginReplicationRpc(
                           const CreateCheckpointRequest& req,
                           CreateCheckpointResponse& res)
 {
-  logger->Log(Severity::INFO, FormatString("BeginReplicationRpc: shard=%d\n", req.shard_number));
-
   // Path to the db
-  std::string shard_path = std::filesystem::path(src_path_)/std::to_string(req.shard_number);
-  logger->Log(Severity::INFO, FormatString("Shard path: %s\n", shard_path));
+  logger->Log(Severity::INFO, FormatString("Shard path: %s\n", src_path_));
 
   // Open the db
   ROCKSDB_NAMESPACE::DB* db;
@@ -47,7 +44,7 @@ RepStatus ReplicationServer::BeginReplicationRpc(
   options.OptimizeForXdpRocks();
   options.pliops_db_options.graceful_close_timeout_sec = 0;
 #endif
-  auto s = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
+  auto s = ROCKSDB_NAMESPACE::DB::Open(options, src_path_, &db);
   if (!s.ok()) {
     logger->Log(Severity::ERROR, FormatString("DB::Open failed: %s\n", s.ToString()));
     return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DB::Open failed: %s", s.ToString()));
@@ -98,8 +95,8 @@ RepStatus ReplicationServer::StartReplicationStreamingRpc(
                           const StartStreamingRequest& req,
                           StartStreamingResponse& res)
 {
-  logger->Log(Severity::INFO, FormatString("StartReplicationStreamingRpc: ip=%s, checkpoint_id=%d, port=%d, #thread=%d\n",
-                client_ip_.c_str(), req.checkpoint_id, req.consumer_port, max_num_ranges_));
+  logger->Log(Severity::INFO, FormatString("StartReplicationStreamingRpc: ip=%s, checkpoint_id=%d, port=%d\n",
+                client_ip_.c_str(), req.checkpoint_id, req.consumer_port));
 
   // We expect to get the same checkpoint_id as we provided in the BeginReplicationRpc call
   if (req.checkpoint_id != checkpoint_id_) {
@@ -113,7 +110,7 @@ RepStatus ReplicationServer::StartReplicationStreamingRpc(
     std::bind(&ReplicationServer::ReplicationDone, this, _1, _2); 
 
   // Staring producer
-  RepStatus rc = producer_->Start(client_ip_, req.consumer_port, max_num_ranges_,
+  RepStatus rc = producer_->Start(client_ip_, req.consumer_port,
                                   parallelism_, ops_timeout_msec_, connect_timeout_msec_,
                                   done_cb);
   if (!rc.ok()) {
@@ -228,7 +225,6 @@ RepStatus RunReplicationServer(
                             RpcChannel& rpc,
                             const std::string& src_path,
                             const std::string& client_ip,
-                            int max_num_ranges,
                             int parallelism, 
                             int ops_timeout_msec,
                             int connect_timeout_msec,
@@ -236,8 +232,8 @@ RepStatus RunReplicationServer(
 {
   using namespace std::placeholders;
 
-  ReplicationServer rs(src_path, client_ip, max_num_ranges,
-                        parallelism, ops_timeout_msec, connect_timeout_msec, kv_pair_serializer);
+  ReplicationServer rs(src_path, client_ip, parallelism, ops_timeout_msec,
+                       connect_timeout_msec, kv_pair_serializer);
 
   std::function<RepStatus(const CreateCheckpointRequest&, CreateCheckpointResponse&)>
     create_checkpoint_cb = std::bind(&ReplicationServer::BeginReplicationRpc, &rs, _1, _2); 
