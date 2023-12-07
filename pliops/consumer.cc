@@ -163,7 +163,7 @@ RepStatus Consumer::Start(const std::string& replica_path, uint16_t& port,
     return rc;
   }
 
-  message_queue_ = std::make_unique<ServerMessageQueue>(SERVER_MESSAGE_QUEUE_CAPACITY);
+  message_queue_ = std::make_unique<ConsumerMessageQueue>(CONSUMER_MESSAGE_QUEUE_CAPACITY);
   start_time_ = std::chrono::system_clock::now();
 
   // Start writer thread

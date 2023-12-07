@@ -72,7 +72,7 @@ static void ParseArgs(int argc, char *argv[],
 }
 
 int main(int argc, char* argv[]) {
-  int shard;
+  int shard = -1;
   std::string dsp_path;
   std::string server_ip;
   int ops_timeout_msec = 60000; // default timeout

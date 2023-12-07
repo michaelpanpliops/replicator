@@ -15,8 +15,8 @@ namespace Replicator {
 using ConsumerState = Replicator::State;
 using RepStatus = Replicator::Status;
 
-using ServerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
-constexpr size_t SERVER_MESSAGE_QUEUE_CAPACITY = 32 * 10000;
+using ConsumerMessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
+constexpr size_t CONSUMER_MESSAGE_QUEUE_CAPACITY = 32 * 1000;
 
 struct Statistics {
   std::atomic<uint64_t> num_kv_pairs = 0;
@@ -52,7 +52,7 @@ private:
   IKvPairSerializer& kv_pair_serializer_;
  
   // The KV pairs received over the network. The writer pull messages out of the queue.
-  std::unique_ptr<ServerMessageQueue> message_queue_;
+  std::unique_ptr<ConsumerMessageQueue> message_queue_;
 
   // DB
   ROCKSDB_NAMESPACE::DB* shard_ = nullptr;

@@ -8,7 +8,7 @@
 #include "communication.h"
 #include "defs.h"
 #include "rocksdb/db.h"
-#include "utils/blocking_concurrent_queue.h"
+#include "utils/ring_buffer.h"
 #include "pliops/status.h"
 
 
@@ -18,8 +18,8 @@ using ProducerState = Replicator::State;
 using RepStatus = Replicator::Status;
 
 using RangeType = std::pair<std::optional<std::string>, std::optional<std::string>>;
-using MessageQueue = moodycamel::BlockingConcurrentQueue<std::pair<std::string, std::string>>;
-constexpr size_t MESSAGE_QUEUE_CAPACITY = 32 * 10000;
+using MessageQueue = moodycamel::SingleProducerSingleConsumerRingBuffer<std::pair<std::string, std::string>>;
+constexpr size_t MESSAGE_QUEUE_CAPACITY = 32 * 1000;
 
 struct Statistics {
   std::atomic<uint64_t> num_kv_pairs = 0;
@@ -31,8 +31,7 @@ public:
   explicit Producer(IKvPairSerializer& kv_pair_serializer);
   virtual ~Producer();
   RepStatus OpenShard(const std::string& shard_path);
-  RepStatus Start(const std::string& ip, uint16_t port,
-            uint32_t max_num_of_threads, uint32_t parallelism,
+  RepStatus Start(const std::string& ip, uint16_t port, uint32_t parallelism,
             uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
             std::function<void(ProducerState, const RepStatus&)>& done_callback);
   RepStatus Stop();
@@ -48,7 +47,7 @@ private:
   std::unique_ptr<std::thread> communication_thread_;
 
   // Reader threads
-  std::vector<std::thread> reader_threads_;
+  std::thread reader_thread_;
 
   // Statistics
   Statistics statistics_;
@@ -62,10 +61,6 @@ private:
   // DB
   ROCKSDB_NAMESPACE::DB* shard_ = nullptr;
 
-  // Key range per reader thread
-  std::vector<RangeType> thread_key_ranges_;
-  RepStatus CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges);
-
   // Signal threads to exit
   std::atomic<bool> kill_;
   uint32_t ops_timeout_msec_;
@@ -75,10 +70,6 @@ private:
   void ReaderThread(uint32_t iterator_parallelism_factor, uint32_t thread_id);
   void CommunicationThread();
   void StopImpl();
-
-  // Track the active reading threads, the last active thread does the cleanup
-  unsigned int active_reader_threads_count_;
-  std::mutex active_reader_threads_mutex_;
 
   // The replication starting time
   std::chrono::time_point<std::chrono::system_clock> start_time_;
