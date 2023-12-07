@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <future>
 
-#include "pliops_calc_key_ranges.cc"
 #include "producer.h"
 
 
@@ -26,11 +25,9 @@ RepStatus Producer::OpenShard(const std::string& shard_path)
   options.create_if_missing = false;
   options.error_if_exists = false;
   options.disable_auto_compactions = true;
-#ifndef LEGACY_ROCKSDB_SENDER
+#ifdef XDPROCKS
   options.OptimizeForXdpRocks();
   options.pliops_db_options.graceful_close_timeout_sec = 0;
-#else
-  // Tune legacy RocksDB options here
 #endif
   auto status = ROCKSDB_NAMESPACE::DB::Open(options, shard_path, &db);
   if (!status.ok()) {
@@ -49,10 +46,8 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   ROCKSDB_NAMESPACE::ColumnFamilyDescriptor cf_desc;
   ROCKSDB_NAMESPACE::DB* db;
   ROCKSDB_NAMESPACE::Iterator* iterator;
-  RangeType range;
 
   db = shard_;
-  range = thread_key_ranges_[thread_id];
   auto status = db->DefaultColumnFamily()->GetDescriptor(&cf_desc);
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: cf_handle_->GetDescriptor failed, reason: %s\n", status.ToString()));
@@ -61,9 +56,13 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   }
 
   // Create iterator with internal parallelism
-  ReadOptions read_opts;
+  ROCKSDB_NAMESPACE::ReadOptions read_opts;
+#ifdef XDPROCKS
   read_opts.iterator_internal_parallelism_enabled = true; // default is false
-  read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor;
+  read_opts.iterator_internal_parallelism_factor = iterator_parallelism_factor; // number of threads
+  read_opts.advanced_iterator_kvfs_parallelism_factor = 4;
+  read_opts.readahead_size = (4 * 4096 * read_opts.advanced_iterator_kvfs_parallelism_factor); // determines the queue size (By dividing it with 4K).
+#endif
   iterator = db->NewIterator(read_opts, db->DefaultColumnFamily());
   if (!iterator) {
     logger->Log(Severity::ERROR, "Reader thread: db->NewIterator returned nullptr\n");
@@ -71,13 +70,8 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     return;
   }
 
-  if (range.first) {
-    // Seek to the first element in the range
-    iterator->Seek(*range.first);
-  } else {
-    // Seek to the database beginning
-    iterator->SeekToFirst();
-  }
+  // Seek to the database beginning
+  iterator->SeekToFirst();
 
   while(!kill_) {
     // Send the next KV pair.
@@ -85,21 +79,21 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
     if(!iterator->Valid()){
       break; // Finished reading range for this thread.
     }
-    // Stop iterate if we have reached the end of the range
-    // For the last range, the interator will stop on Valid() check above
-    if (range.second && cf_desc.options.comparator->Compare(iterator->key(), *range.second) >= 0) {
-      break;
-    }
 
     key = iterator->key();
     value = iterator->value();
 
-    if (!EnqueueTimed(message_queue_, {std::string(key.data(), key.size()), std::string(value.data(), value.size())}, kill_, ops_timeout_msec_)) {
+    if (kill_ || !message_queue_->wait_enqueue_timed({std::string(key.data(), key.size()), std::string(value.data(), value.size())}, msec_to_usec(ops_timeout_msec_))) {
+      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       // We must release the iterator here, otherwise DB::Close will crash
+#ifdef XDPROCKS
       status = iterator->Close();
+      if (!status.ok()) {
+        logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
+      }
+#endif
       delete iterator;
 
-      logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
       SetState(ProducerState::ERROR, RepStatus(Code::NETWORK_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
       return;
     }
@@ -113,18 +107,17 @@ void Producer::ReaderThread(uint32_t iterator_parallelism_factor, uint32_t threa
   logger->Log(Severity::INFO, FormatString("Reader thread #%d ended. Performed %lld operations.\n", thread_id, total_number_of_operations));
 
   // Release the iterator
+#ifdef XDPROCKS
   status = iterator->Close();
+#endif
   delete iterator;
   if (!status.ok()) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s\n", status.ToString()));
     SetState(ProducerState::ERROR, RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Reader thread: iterator->Close failed, reason: %s", status.ToString())));
   }
 
-  // The following code must be under lock to ensure atomicity
-  std::lock_guard<std::mutex> lock(active_reader_threads_mutex_);
-  active_reader_threads_count_--;
   // The last active thread signals end of communications
-  if (active_reader_threads_count_ == 0 && !EnqueueTimed(message_queue_, {"",""}, kill_, ops_timeout_msec_)) {
+  if (kill_ || !message_queue_->wait_enqueue_timed({"", ""}, msec_to_usec(ops_timeout_msec_))) {
     logger->Log(Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout\n"));
     SetState(ProducerState::ERROR, RepStatus(Code::TIMEOUT_FAILURE, Severity::ERROR, FormatString("Reader thread: enqueue failed, reason: timeout")));
   }
@@ -173,35 +166,8 @@ void Producer::CommunicationThread() {
   logger->Log(Severity::INFO, FormatString("Communication thread ended.\n"));
 }
 
-RepStatus Producer::CalculateThreadKeyRanges(uint32_t max_num_of_threads, std::vector<RangeType>& ranges) {
-  // Calculate ranges
-  auto db = shard_;
-  ROCKSDB_NAMESPACE::ColumnFamilyHandle* cf_handle = db->DefaultColumnFamily();
-  ranges.clear();
-  std::vector<std::string> range_split_keys;
-
-  auto status = CalcKeyRanges(db, cf_handle, max_num_of_threads, range_split_keys);
-  if (!status.ok()) {
-    logger->Log(Severity::ERROR, FormatString("Error in CalcKeyRanges: %s", status.ToString()));
-    return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("Error in CalcKeyRanges: %s", status.ToString()));
-  }
-
-  // Create vector of ranges
-  RangeType range;
-  range.first = std::optional<std::string>();
-  range.second = range_split_keys.size() ? range_split_keys.front() : std::optional<std::string>();
-  ranges.push_back(range);
-  for (size_t i = 0; i < range_split_keys.size(); i++) {
-    range.first = range_split_keys[i];
-    range.second = (i == range_split_keys.size() - 1) ? std::optional<std::string>() : range_split_keys[i+1];
-    ranges.push_back(range);
-  }
-  return RepStatus();
-}
-
 RepStatus Producer::Start(const std::string& ip, uint16_t port,
-                    uint32_t max_num_of_threads, uint32_t parallelism,
-                    uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
+                    uint32_t parallelism, uint32_t ops_timeout_msec, uint32_t connect_timeout_msec,
                     std::function<void(ProducerState, const RepStatus&)>& done_callback)
 {
   done_callback_ = done_callback;
@@ -212,18 +178,10 @@ RepStatus Producer::Start(const std::string& ip, uint16_t port,
   assert(state_ == ProducerState::IDLE);
   SetState(ProducerState::IN_PROGRESS, RepStatus());
 
-  // Split into ranges
-  RepStatus rc = CalculateThreadKeyRanges(max_num_of_threads, thread_key_ranges_);
-  if (!rc.ok()) {
-    logger->Log(Severity::ERROR, "CalculateThreadKeyRanges failed\n");
-    return rc;
-  }
-  logger->Log(Severity::INFO, FormatString("Shard is split into %d read ranges\n", thread_key_ranges_.size()));
-
   // Connect to consumer
   logger->Log(Severity::INFO, "Connecting to consumer...\n");
   message_queue_ = std::make_unique<MessageQueue>(MESSAGE_QUEUE_CAPACITY);
-  rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, connect_timeout_msec_);
+  auto rc = Connect<ConnectionType::TCP_SOCKET>(ip, port, connection_, connect_timeout_msec_);
   if (!rc.ok()) {
     logger->Log(Severity::ERROR, "Socket connect failed\n");
     return rc;
@@ -239,16 +197,12 @@ RepStatus Producer::Start(const std::string& ip, uint16_t port,
   });
 
   // Start the reader threads
-  logger->Log(Severity::INFO, "Starting reader threads\n");
-  assert(max_num_of_threads >= thread_key_ranges_.size());
-  auto threads_per_shard = thread_key_ranges_.size();
+  logger->Log(Severity::INFO, "Starting reader thread\n");
 
-  active_reader_threads_count_ = threads_per_shard;
-  for (uint32_t thread_id = 0; thread_id < threads_per_shard; ++thread_id) {
-    reader_threads_.push_back(std::thread([this, parallelism, thread_id]() {
-                this->ReaderThread(parallelism, thread_id);
-    }));
-  }
+  uint32_t thread_id = 0;
+  reader_thread_ = std::thread([this, parallelism, thread_id]() {
+              this->ReaderThread(parallelism, thread_id);
+    });
 
   return RepStatus();
 }
@@ -260,14 +214,12 @@ void Producer::StopImpl()
 
   // Tell threads to exit
   kill_ = true;
-  for (auto& reader_thread : reader_threads_) {
-    reader_thread.join();
-  }
+  reader_thread_.join();
 
   // We need to signal communication thread with poison pill
   // because it could be waiting on queue
   std::atomic<bool> dummy(false);
-  if (message_queue_) EnqueueTimed(message_queue_, {"",""}, dummy, ops_timeout_msec_);
+  if (message_queue_) message_queue_->wait_enqueue_timed({"", ""}, msec_to_usec(ops_timeout_msec_));
   if (communication_thread_) communication_thread_->join();
   connection_.reset();
   message_queue_.reset();
@@ -331,28 +283,6 @@ void Producer::SetState(const ProducerState& state, const RepStatus& status)
   if (IsFinalState(state_) && done_callback_) {
     done_callback_(state_, status_);
   }
-}
-
-bool Producer::EnqueueTimed(std::unique_ptr<Replicator::MessageQueue>& message_queue,
-                   std::pair<std::string, std::string>&& message,
-                   std::atomic<bool>& kill,
-                   uint64_t timeout_msec) {
-  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
-  bool enqueued = false;
-  while (!enqueued && !kill) {
-    enqueued = message_queue->try_enqueue(message);
-
-    if (!enqueued) {
-      auto current_time = std::chrono::steady_clock::now();
-      auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time);
-
-      if (elapsed_time.count() >= timeout_msec) {
-        return false;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }  
-  }
-  return enqueued;
 }
 
 }

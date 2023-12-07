@@ -3,8 +3,6 @@
 #include <map>
 #include <iostream>
 
-using namespace ROCKSDB_NAMESPACE;
-
 
 namespace {
 std::unique_ptr<CheckpointConsumer> consumer_;
@@ -133,7 +131,7 @@ RepStatus BeginReplication(RpcChannel& rpc, int32_t shard, const std::string &ds
   if (!std::filesystem::exists(replica_path)) {
     std::filesystem::create_directories(replica_path);
   } if (!std::filesystem::is_empty(replica_path)) {
-    auto s = DestroyDB(replica_path, Options());
+    auto s = ROCKSDB_NAMESPACE::DestroyDB(replica_path, ROCKSDB_NAMESPACE::Options());
     if (!s.ok()) {
       logger->Log(Severity::ERROR, FormatString("DestroyDB failed: %s\n", s.ToString()));
       return RepStatus(Code::DB_FAILURE, Severity::ERROR, FormatString("DestroyDB failed: %s", s.ToString()));
